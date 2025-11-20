@@ -1,0 +1,57 @@
+/* นำเข้า Tailwind v4 */
+@import "tailwindcss";
+
+/* นำเข้าฟอนต์ */
+@import url('https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;600&display=swap');
+
+/* ตั้งค่า Theme และ Animation แบบ v4 */
+@theme {
+  /* ตั้งค่าฟอนต์ */
+  --font-sans: "Kanit", sans-serif;
+
+  /* ตั้งค่า Animation */
+  --animate-fade-in: fadeIn 0.5s ease-out;
+  --animate-slide-up: slideUp 0.5s ease-out;
+
+  /* Keyframes */
+  @keyframes fadeIn {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    0% { opacity: 0; transform: translateY(20px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+}
+
+/* Global Styles */
+:root {
+  font-family: "Kanit", sans-serif;
+  background-color: #f8fafc; /* bg-slate-50 */
+  color: #1e293b;            /* text-slate-800 */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9; 
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1; 
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8; 
+}
