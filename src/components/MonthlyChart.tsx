@@ -57,8 +57,7 @@ const fetchDataAndTransform = async (_productId?: string) => {
         const date = new Date(t.created_at);
         // สร้าง Key สำหรับจัดกลุ่มรายเดือน (YYYY-MM)
         const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        // สร้าง Label ที่อ่านง่ายสำหรับแสดงบนกราฟ
-        const _monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
+        // สร้าง Label ที่อ่านง่ายสำหรับแสดงบนกราฟ (แต่ไม่ใช้ตรงนี้)
         
         let change = 0;
         if (t.type === 'ADD') {
@@ -78,10 +77,9 @@ const fetchDataAndTransform = async (_productId?: string) => {
     const result: ChartDataPoint[] = sortedKeys.map(key => {
         const [year, month] = key.split('-');
         const date = new Date(parseInt(year), parseInt(month) - 1);
-        const _monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
-        
+        // ใช้ _monthLabel ใน struct จริง ๆ เท่านั้น
         return {
-            _monthLabel: _monthLabel,
+            _monthLabel: date.toLocaleString('th-TH', { month: 'short', year: '2-digit' }),
             netChange: monthlyDataMap.get(key) || 0,
         };
     });

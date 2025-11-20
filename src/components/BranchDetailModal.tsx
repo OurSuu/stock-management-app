@@ -83,11 +83,7 @@ const BranchDetailModal: React.FC<{ branchId: string, branchName: string, onClos
             thailandNow.getMonth(),
             thailandNow.getDate(), 0, 0, 0, 0
         );
-        const endOfTodayTh = new Date(
-            thailandNow.getFullYear(),
-            thailandNow.getMonth(),
-            thailandNow.getDate(), 23, 59, 59, 999
-        );
+        // Removed unused variable endOfTodayTh
         const todayDateStr = todayTh.toLocaleDateString('th-TH');
         const currentMonthStrTh = thailandNow.toLocaleDateString('th-TH', { month: 'numeric', year: 'numeric' });
 

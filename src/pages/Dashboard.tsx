@@ -13,21 +13,14 @@ import BranchDetailModal from '../components/BranchDetailModal'; // เพิ่
 type BranchSummary = { id: string; branch_name: string; status: 'good' | 'warning' | 'critical'; total_stock_value: number; };
 type UsageSummary = { name: string; unit: string; received: number; used: number; remaining: number; };
 
-type LowStockItem = {
-    id: number;
-    branch_id?: string; // เพิ่ม branch_id
-    branch_name: string;
-    product_name: string;
-    current_quantity: number;
-    min_alert: number;
-    unit: string;
-};
+// Remove the local LowStockItem definition so we use the StockAlerts's type instead
+import type { LowStockItem as StockAlertLowStockItem } from '../components/StockAlerts';
 
 const Dashboard: React.FC = () => {
 
     const [branches, setBranches] = useState<BranchSummary[]>([]);
     const [globalSummary, setGlobalSummary] = useState<{ today: UsageSummary[], month: UsageSummary[] }>({ today: [], month: [] });
-    const [lowStockItems, setLowStockItems] = useState<LowStockItem[]>([]);
+    const [lowStockItems, setLowStockItems] = useState<StockAlertLowStockItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
@@ -100,27 +93,7 @@ const Dashboard: React.FC = () => {
         };
     };
 
-    // ====== REPLACEMENT FOR toThaiISODate & toThaiISOMonth: use Intl.DateTimeFormat (รองรับ Vercel/serverless) ======
-
-    const toThaiISODate = (dateInput: string | Date) => {
-        // format to "YYYY-MM-DD" in Thailand timezone safely (without relying on toISOString for local time)
-        const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-        // Get formatted parts in Asia/Bangkok time
-        const options: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' };
-        const formatter = new Intl.DateTimeFormat('en-CA', options); // "YYYY-MM-DD"
-        return formatter.format(d);
-    };
-
-    const toThaiISOMonth = (dateInput: string | Date) => {
-        // format to "YYYY-MM" in Thailand timezone safely
-        const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-        const options: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' };
-        const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(d);
-        // parts: [{type: 'year', value: '2024'}, {type: 'month', value:'06'}]
-        const year = parts.find((part) => part.type === 'year')?.value;
-        const month = parts.find((part) => part.type === 'month')?.value;
-        return `${year}-${month}`;
-    };
+    // Removed unused toThaiISODate & toThaiISOMonth
 
     const fetchData = useCallback(async () => {
         try {
@@ -133,16 +106,13 @@ const Dashboard: React.FC = () => {
                 .select('id, current_quantity, products(name, min_alert_quantity, unit), branches(id, branch_name)');
 
             // --- คำนวณ Alerts และ Remaining ---
-            const alerts: LowStockItem[] = [];
+            const alerts: StockAlertLowStockItem[] = [];
             const branchStatusMap = new Map<string, 'good' | 'warning' | 'critical'>();
             const productRemainingMap = new Map<string, number>();
 
             allStock?.forEach((item: any) => {
                 const qty = item.current_quantity;
                 const min = item.products?.min_alert_quantity || 0;
-                // ❌ ของเดิม (สาเหตุที่พัง)
-                // const branchId = item.branches?.id;
-                // ✅ แก้เป็น (เติม || '' ต่อท้าย)
                 const branchId = item.branches?.id || '';
                 const prodName = item.products?.name || 'Unknown';
 
