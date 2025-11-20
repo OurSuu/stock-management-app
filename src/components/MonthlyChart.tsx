@@ -26,12 +26,12 @@ ChartJS.register(
 
 // 3. กำหนด Type สำหรับข้อมูลที่จัดเตรียมแล้ว
 type ChartDataPoint = {
-    monthLabel: string; // เช่น 'Nov 2025'
+    _monthLabel: string; // เช่น 'Nov 2025', เพิ่ม _ prefix
     netChange: number; // ผลรวมของ ADD - REMOVE
 };
 
 // 4. ฟังก์ชันหลักในการดึงและจัดเตรียมข้อมูล
-const fetchDataAndTransform = async (productId?: string) => {
+const fetchDataAndTransform = async (_productId?: string) => {
     // Note: Supabase Query สามารถดึงข้อมูลดิบเท่านั้น 
     // เราจึงต้องประมวลผลการจัดกลุ่ม (Group by) และผลรวม (SUM) ที่ฝั่ง Client
 
@@ -58,7 +58,7 @@ const fetchDataAndTransform = async (productId?: string) => {
         // สร้าง Key สำหรับจัดกลุ่มรายเดือน (YYYY-MM)
         const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
         // สร้าง Label ที่อ่านง่ายสำหรับแสดงบนกราฟ
-        const monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
+        const _monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
         
         let change = 0;
         if (t.type === 'ADD') {
@@ -78,10 +78,10 @@ const fetchDataAndTransform = async (productId?: string) => {
     const result: ChartDataPoint[] = sortedKeys.map(key => {
         const [year, month] = key.split('-');
         const date = new Date(parseInt(year), parseInt(month) - 1);
-        const monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
+        const _monthLabel = date.toLocaleString('th-TH', { month: 'short', year: '2-digit' });
         
         return {
-            monthLabel: monthLabel,
+            _monthLabel: _monthLabel,
             netChange: monthlyDataMap.get(key) || 0,
         };
     });
@@ -107,7 +107,7 @@ const MonthlyChart: React.FC = () => {
 
     // 8. การจัดโครงสร้างข้อมูลให้ Chart.js
     const dataForChart = {
-        labels: chartData.map(d => d.monthLabel),
+        labels: chartData.map(d => d._monthLabel),
         datasets: [
             {
                 label: 'ยอดเปลี่ยนแปลงสุทธิ (หน่วยรวม)',

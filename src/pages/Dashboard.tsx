@@ -100,16 +100,26 @@ const Dashboard: React.FC = () => {
         };
     };
 
-    // รับวันที่/UTC string คืน "YYYY-MM-DD" ตามวันที่ไทยจริง
+    // ====== REPLACEMENT FOR toThaiISODate & toThaiISOMonth: use Intl.DateTimeFormat (รองรับ Vercel/serverless) ======
+
     const toThaiISODate = (dateInput: string | Date) => {
-        const d = new Date(dateInput);
-        const thaiTime = new Date(d.getTime() + 7 * 60 * 60 * 1000);
-        return thaiTime.toISOString().split('T')[0];
+        // format to "YYYY-MM-DD" in Thailand timezone safely (without relying on toISOString for local time)
+        const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+        // Get formatted parts in Asia/Bangkok time
+        const options: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' };
+        const formatter = new Intl.DateTimeFormat('en-CA', options); // "YYYY-MM-DD"
+        return formatter.format(d);
     };
+
     const toThaiISOMonth = (dateInput: string | Date) => {
-        const d = new Date(dateInput);
-        const thaiTime = new Date(d.getTime() + 7 * 60 * 60 * 1000);
-        return thaiTime.toISOString().slice(0, 7);
+        // format to "YYYY-MM" in Thailand timezone safely
+        const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+        const options: Intl.DateTimeFormatOptions = { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' };
+        const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(d);
+        // parts: [{type: 'year', value: '2024'}, {type: 'month', value:'06'}]
+        const year = parts.find((part) => part.type === 'year')?.value;
+        const month = parts.find((part) => part.type === 'month')?.value;
+        return `${year}-${month}`;
     };
 
     const fetchData = useCallback(async () => {
@@ -130,7 +140,10 @@ const Dashboard: React.FC = () => {
             allStock?.forEach((item: any) => {
                 const qty = item.current_quantity;
                 const min = item.products?.min_alert_quantity || 0;
-                const branchId = item.branches?.id;
+                // ❌ ของเดิม (สาเหตุที่พัง)
+                // const branchId = item.branches?.id;
+                // ✅ แก้เป็น (เติม || '' ต่อท้าย)
+                const branchId = item.branches?.id || '';
                 const prodName = item.products?.name || 'Unknown';
 
                 const currentTotal = productRemainingMap.get(prodName) || 0;
@@ -246,8 +259,9 @@ const Dashboard: React.FC = () => {
 
     // สำหรับแสดงวันที่ในส่วน summary section (แบบไทยในโซน +7 - ไม่ต้องเปลี่ยน logic นี้)
     const displayTodayThai = () => {
-        const thaiTime = new Date(Date.now() + (7 * 60 * 60 * 1000));
-        return thaiTime.toLocaleDateString('th-TH');
+        // ใช้ Intl.DateTimeFormat + Asia/Bangkok แทน
+        const now = new Date();
+        return new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', year: 'numeric', month: 'long', day: 'numeric' }).format(now);
     };
 
     return (

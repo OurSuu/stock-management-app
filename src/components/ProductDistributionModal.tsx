@@ -119,7 +119,7 @@ const ProductDistributionModal: React.FC<{
             {
                 label: 'จำนวนคงเหลือ',
                 data: chartData.map(d => d.quantity),
-                backgroundColor: chartData.map((d, i) => {
+                backgroundColor: chartData.map((_, i) => {
                     // ไล่สีตามอันดับ (Ranking Color)
                     if (sortOrder === 'desc') {
                         if (i === 0) return '#7c3aed'; // ม่วงเข้ม (ที่ 1)
