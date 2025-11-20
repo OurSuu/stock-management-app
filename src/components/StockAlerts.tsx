@@ -1,8 +1,9 @@
 import React from 'react';
 
-// Type สำหรับสินค้าที่ใกล้หมด
+// เพิ่ม branch_id เพื่อใช้ลิงก์ไปหน้าสาขา
 export type LowStockItem = {
     id: number;
+    branch_id: string; // <--- เพิ่ม branch_id
     branch_name: string;
     product_name: string;
     current_quantity: number;
@@ -10,8 +11,11 @@ export type LowStockItem = {
     unit: string;
 };
 
-const StockAlerts: React.FC<{ items: LowStockItem[] }> = ({ items }) => {
-
+// รับ Props เพิ่ม: onBranchClick
+const StockAlerts: React.FC<{
+    items: LowStockItem[],
+    onBranchClick: (branch_id: string, branch_name: string) => void
+}> = ({ items, onBranchClick }) => {
     return (
         <div className="bg-white rounded-2xl shadow-md border border-red-100 overflow-hidden h-full flex flex-col">
             <div className="bg-red-50 p-4 border-b border-red-100 flex items-center justify-between">
@@ -24,16 +28,20 @@ const StockAlerts: React.FC<{ items: LowStockItem[] }> = ({ items }) => {
                     </span>
                 )}
             </div>
-            
             <div className="p-4 overflow-y-auto flex-1 max-h-[350px] custom-scrollbar">
                 {items.length > 0 ? (
                     <ul className="space-y-3">
-                        {items.map((item, i) => (
-                            <li key={i} className="flex flex-col p-3 bg-red-50/50 rounded-xl border border-red-100 hover:bg-red-50 transition">
+                        {items.map((item) => (
+                            // เพิ่ม onClick และ cursor-pointer ให้แต่ละ li
+                            <li
+                                key={item.id}
+                                onClick={() => onBranchClick(item.branch_id, item.branch_name)}
+                                className="flex flex-col p-3 bg-red-50/50 rounded-xl border border-red-100 hover:bg-red-100 transition cursor-pointer group"
+                            >
                                 <div className="flex justify-between items-start">
                                     <div>
-                                        <span className="text-xs font-bold text-gray-500 bg-white border border-gray-200 px-2 py-0.5 rounded-md mb-1 inline-block">
-                                            {item.branch_name}
+                                        <span className="text-xs font-bold text-gray-500 bg-white border border-gray-200 px-2 py-0.5 rounded-md mb-1 inline-block group-hover:border-red-300 transition">
+                                            {item.branch_name} ↗
                                         </span>
                                         <p className="font-bold text-gray-800 text-lg">{item.product_name}</p>
                                     </div>
@@ -45,7 +53,7 @@ const StockAlerts: React.FC<{ items: LowStockItem[] }> = ({ items }) => {
                                     </div>
                                 </div>
                                 <div className="mt-2 pt-2 border-t border-red-100/50 flex justify-between items-center text-xs">
-                                    <span className="text-red-400">
+                                    <span className="text-red-400 font-medium">
                                         {item.current_quantity === 0 ? 'สินค้าหมดสต็อก!' : 'ต่ำกว่าเกณฑ์'}
                                     </span>
                                     <span className="text-gray-400">เกณฑ์เตือน: {item.min_alert}</span>
@@ -57,7 +65,6 @@ const StockAlerts: React.FC<{ items: LowStockItem[] }> = ({ items }) => {
                     <div className="h-full flex flex-col items-center justify-center text-gray-400 text-sm py-10">
                         <span className="text-4xl mb-3">👍</span>
                         <p>เยี่ยมมาก! สต็อกสินค้าเพียงพอ</p>
-                        <p className="text-xs mt-1 opacity-70">ไม่มีรายการที่ต่ำกว่าเกณฑ์แจ้งเตือน</p>
                     </div>
                 )}
             </div>
