@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
-import { Bar } from 'react-chartjs-2'; // เปลี่ยนจาก Line เป็น Bar
+import { Bar } from 'react-chartjs-2';
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -11,10 +11,15 @@ import {
     Tooltip,
     Legend,
 } from 'chart.js';
+// Import types using type-only imports to fix TS verbatimModuleSyntax errors
+import type {
+    ChartOptions,
+    ChartData,
+    ChartDataset,
+} from 'chart.js';
 // @ts-ignore-next-line
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
-// ลงทะเบียน Components ของ Chart.js
 ChartJS.register(
     CategoryScale,
     LinearScale,
@@ -29,7 +34,7 @@ type MonthlyData = {
     monthLabel: string;
     received: number;
     used: number;
-    sortKey: string; // ใช้สำหรับเรียงตามเวลา
+    sortKey: string;
 };
 
 const MonthlyChart: React.FC = () => {
@@ -42,7 +47,7 @@ const MonthlyChart: React.FC = () => {
 
             // 1. ดึงข้อมูลย้อนหลัง 12 เดือน (เดือนปัจจุบัน + ย้อนหลัง 11 เดือน)
             const d = new Date();
-            d.setMonth(d.getMonth() - 11); // ย้อนหลัง 11 เดือน + เดือนปัจจุบัน = 12 เดือน
+            d.setMonth(d.getMonth() - 11);
             d.setDate(1);
             d.setHours(0, 0, 0, 0);
 
@@ -58,16 +63,12 @@ const MonthlyChart: React.FC = () => {
                 return;
             }
 
-            // 2. จัดกลุ่มข้อมูลรายเดือน (แยก รับ/ใช้)
             const groupedData = new Map<string, MonthlyData>();
 
             transactions?.forEach((t: any) => {
-                // ต้องทำเวลาตามเขตไทย
                 const dateObj = new Date(t.created_at);
                 const thaiTime = new Date(dateObj.getTime() + (7 * 60 * 60 * 1000)); // +7 hours
-
                 const key = thaiTime.toISOString().slice(0, 7); // YYYY-MM
-
                 const label = thaiTime.toLocaleDateString('th-TH', {
                     month: 'short',
                     year: '2-digit'
@@ -86,11 +87,10 @@ const MonthlyChart: React.FC = () => {
                 if (t.type === 'ADD') {
                     current.received += t.quantity_change;
                 } else if (t.type === 'REMOVE') {
-                    current.used += t.quantity_change; // ห้ามลบ - ใส่ค่าบวก!
+                    current.used += t.quantity_change;
                 }
             });
 
-            // 3. แปลงกลับเป็น Array และเรียงลำดับ
             const result = Array.from(groupedData.values()).sort((a, b) =>
                 a.sortKey.localeCompare(b.sortKey)
             );
@@ -102,13 +102,14 @@ const MonthlyChart: React.FC = () => {
         fetchData();
     }, []);
 
-    const data = {
+    // Fix typing: ChartDataset<'bar', number[]> (NOT number) -- remove "as" casts
+    const data: ChartData<'bar', number[], string> = {
         labels: chartData.map(d => d.monthLabel),
         datasets: [
             {
                 label: 'ยอดรับเข้า (เพิ่ม)',
                 data: chartData.map(d => d.received),
-                backgroundColor: 'rgba(34, 197, 94, 0.8)', // สีเขียว (Green-500)
+                backgroundColor: 'rgba(34, 197, 94, 0.8)',
                 borderColor: '#16a34a',
                 borderWidth: 1,
                 borderRadius: 4,
@@ -116,16 +117,16 @@ const MonthlyChart: React.FC = () => {
                 categoryPercentage: 0.8,
                 datalabels: {
                     anchor: 'end',
-                    align: 'start',
+                    align: 'start' as const,
                     color: '#16a34a',
                     font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
                     formatter: (value: any) => value > 0 ? value : '',
                 },
-            },
+            } as ChartDataset<'bar', number[]>,
             {
                 label: 'ยอดเบิกใช้ (ลด)',
                 data: chartData.map(d => d.used),
-                backgroundColor: 'rgba(239, 68, 68, 0.8)', // สีแดง (Red-500)
+                backgroundColor: 'rgba(239, 68, 68, 0.8)',
                 borderColor: '#dc2626',
                 borderWidth: 1,
                 borderRadius: 4,
@@ -133,22 +134,22 @@ const MonthlyChart: React.FC = () => {
                 categoryPercentage: 0.8,
                 datalabels: {
                     anchor: 'end',
-                    align: 'end',
+                    align: 'end' as const,
                     color: '#dc2626',
                     font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
                     formatter: (value: any) => value > 0 ? value : '',
                 },
-            },
+            } as ChartDataset<'bar', number[]>,
         ],
     };
 
-    const options = {
+    const options: ChartOptions<'bar'> = {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
             legend: {
-                position: 'top' as const,
-                align: 'end' as const,
+                position: 'top',
+                align: 'end',
                 labels: {
                     font: { family: "'Kanit', sans-serif", size: 12 },
                     usePointStyle: true,
@@ -179,7 +180,6 @@ const MonthlyChart: React.FC = () => {
             datalabels: {
                 display: true,
                 clamp: true,
-                // If you want to control global datalabels, though we set per-dataset above
             }
         },
         scales: {
@@ -202,7 +202,7 @@ const MonthlyChart: React.FC = () => {
             }
         },
         interaction: {
-            mode: 'index' as const,
+            mode: 'index',
             intersect: false,
         },
     };
