@@ -10,6 +10,7 @@ import {
     Title,
     Tooltip,
     Legend,
+    ChartOptions,
 } from 'chart.js';
 // Removed unused type-only imports to fix TS6192 error
 // @ts-ignore-next-line
@@ -154,7 +155,8 @@ const MonthlyChart: React.FC = () => {
         ],
     };
 
-    const options = {
+    // Fixed typing for Chart.js v4: use ChartOptions<"bar"> and fix interaction.mode as array/enum string not plain string
+    const options: ChartOptions<'bar'> = {
         responsive: true,
         maintainAspectRatio: false,
         layout: { padding: { top: 20 } },
@@ -187,7 +189,7 @@ const MonthlyChart: React.FC = () => {
             y: { beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { font: { family: "'Kanit', sans-serif" } } },
             x: { grid: { display: false }, ticks: { font: { family: "'Kanit', sans-serif" } } }
         },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+        interaction: { mode: 'nearest' as const, axis: 'x' as const, intersect: false },
     };
 
     if (isLoading) return (
@@ -206,6 +208,7 @@ const MonthlyChart: React.FC = () => {
 
     return (
         <div className="w-full h-[350px]">
+            
             <Bar options={options} data={data} />
         </div>
     );

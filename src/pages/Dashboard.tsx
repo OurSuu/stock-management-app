@@ -51,20 +51,6 @@ const Dashboard: React.FC = () => {
         return () => { isMounted.current = false; };
     }, []);
 
-    // Utility: return Thai day range in ISO (midnight-midnight)
-    const getTodayThaiMidnightRange = () => {
-        const now = new Date();
-        const bangkok = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-        bangkok.setHours(0,0,0,0);
-        const todayStart = new Date(bangkok);
-        const tomorrow = new Date(bangkok);
-        tomorrow.setDate(bangkok.getDate() + 1);
-
-        const start = new Date(todayStart.getTime() - (todayStart.getTimezoneOffset() * 60000)).toISOString();
-        const end = new Date(tomorrow.getTime() - (tomorrow.getTimezoneOffset() * 60000)).toISOString();
-        return { start, end };
-    };
-
     // Utility: return Thai month range (first day - first day next month) in ISO
     const getThisThaiMonthRange = () => {
         const now = new Date();
@@ -78,6 +64,20 @@ const Dashboard: React.FC = () => {
 
         const start = new Date(monthStart.getTime() - (monthStart.getTimezoneOffset() * 60000)).toISOString();
         const end = new Date(monthEnd.getTime() - (monthEnd.getTimezoneOffset() * 60000)).toISOString();
+        return { start, end };
+    };
+
+    // Utility: return Thai "today" range (midnight to next midnight Thailand time) in ISO
+    const getTodayThaiMidnightRange = () => {
+        const now = new Date();
+        const bangkokNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+        bangkokNow.setHours(0, 0, 0, 0);
+        const todayStart = new Date(bangkokNow);
+        const todayEnd = new Date(bangkokNow);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+
+        const start = new Date(todayStart.getTime() - (todayStart.getTimezoneOffset() * 60000)).toISOString();
+        const end = new Date(todayEnd.getTime() - (todayEnd.getTimezoneOffset() * 60000)).toISOString();
         return { start, end };
     };
 
@@ -148,9 +148,7 @@ const Dashboard: React.FC = () => {
                 setBranches(mappedBranches);
             }
 
-            // Remove unused destructured variables
-            // const { start: thaiMidnightStart, end: thaiMidnightEnd } = getTodayThaiMidnightRange();
-            // const { start: thaiMonthStart, end: thaiMonthEnd } = getThisThaiMonthRange();
+            // ใช้งาน getThisThaiMonthRange ตามปรกติ (ต้องใช้สำหรับ fetch เดือน)
             const { start: thaiMonthStart, end: thaiMonthEnd } = getThisThaiMonthRange();
 
             // fetch transactions, but obviously exclude deleted, and only in current Thai month
@@ -175,12 +173,11 @@ const Dashboard: React.FC = () => {
             const monthMap = new Map<string, UsageSummary>();
             const todayMap = new Map<string, UsageSummary>();
 
-            // คำนวณวันที่และเดือนปัจจุบันใน timezone ไทย (ISO)
+            // การกำหนดวันนี้และเดือนนี้โดยใช้ timezone ไทย
             const now = new Date();
             const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
             const currentMonthStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' });
 
-            // ใช้ Loop และ Logic ตามเป้าหมายใหม่
             txnData?.forEach((t: any) => {
                 const txnDate = new Date(t.created_at);
 
@@ -193,24 +190,22 @@ const Dashboard: React.FC = () => {
                 const qty = Number(t.quantity_change);
                 const type = t.type;
 
-                // ฟังก์ชันช่วยคำนวณ (รวม Logic ใหม่ตรงนี้)
                 const updateSummary = (item: UsageSummary) => {
                     if (type === 'ADD') {
                         item.received += qty;
                     } else if (type === 'REMOVE') {
                         item.used += Math.abs(qty);
                     } else if (type === 'RESTORE') {
-                        // ✅ แก้ไข: ถ้ารายการเป็นกู้คืน ให้เอาไป "ลบออกจากยอดใช้"
                         item.used -= Math.abs(qty);
                     }
                 };
 
-                // 1. ยอดเดือน
+                // สะสมยอดในเดือน
                 if (txnMonthStr === currentMonthStr) {
                     updateSummary(getOrInit(monthMap, prodName, unit));
                 }
 
-                // 2. ยอดวัน
+                // สะสมยอดในวัน (ไทย)
                 if (txnDateStr === todayStr) {
                     updateSummary(getOrInit(todayMap, prodName, unit));
                 }
@@ -225,7 +220,6 @@ const Dashboard: React.FC = () => {
             // Month totals
             const monthSummaries: UsageSummary[] = [];
             allProdNamesWithUnit.forEach(({ unit }, prodKey) => {
-                // Parse the prodKey back to just the product name for display
                 const [name] = prodKey.split('###');
                 const agg = monthMap.get(prodKey) || { name, unit, received: 0, used: 0, remaining: 0 };
                 monthSummaries.push({
