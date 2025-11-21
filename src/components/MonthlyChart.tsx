@@ -1,150 +1,229 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-// 1. นำเข้า Chart Components และ Type
-import { Line } from 'react-chartjs-2';
-import { 
-  Chart as ChartJS, 
-  CategoryScale, 
-  LinearScale, 
-  PointElement, 
-  LineElement, 
-  Title, 
-  Tooltip, 
-  Legend 
-} from 'chart.js';
 
-// 2. ลงทะเบียน Chart.js Components ที่จำเป็น
+import { Bar } from 'react-chartjs-2'; // เปลี่ยนจาก Line เป็น Bar
+import {
+    Chart as ChartJS,
+    CategoryScale,
+    LinearScale,
+    BarElement,
+    Title,
+    Tooltip,
+    Legend,
+} from 'chart.js';
+// @ts-ignore-next-line
+import ChartDataLabels from 'chartjs-plugin-datalabels';
+
+// ลงทะเบียน Components ของ Chart.js
 ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend
+    CategoryScale,
+    LinearScale,
+    BarElement,
+    Title,
+    Tooltip,
+    Legend,
+    ChartDataLabels
 );
 
-// 3. กำหนด Type สำหรับข้อมูลที่จัดเตรียมแล้ว
-type ChartDataPoint = {
-    _monthLabel: string; // เช่น 'Nov 2025', เพิ่ม _ prefix
-    netChange: number; // ผลรวมของ ADD - REMOVE
+type MonthlyData = {
+    monthLabel: string;
+    received: number;
+    used: number;
+    sortKey: string; // ใช้สำหรับเรียงตามเวลา
 };
 
-// 4. ฟังก์ชันหลักในการดึงและจัดเตรียมข้อมูล
-const fetchDataAndTransform = async (_productId?: string) => {
-    // Note: Supabase Query สามารถดึงข้อมูลดิบเท่านั้น 
-    // เราจึงต้องประมวลผลการจัดกลุ่ม (Group by) และผลรวม (SUM) ที่ฝั่ง Client
-
-    const { data: transactions, error } = await supabase
-        .from('transactions')
-        .select(`
-            created_at, 
-            type, 
-            quantity_change
-        `)
-        // กรองเฉพาะการทำรายการ 12 เดือนล่าสุด (ถ้ามีเวลา)
-        .order('created_at', { ascending: true }); 
-
-    if (error) {
-        console.error('Error fetching transactions:', error);
-        return [];
-    }
-
-    // 5. การจัดเตรียมและรวมข้อมูล (Data Transformation)
-    const monthlyDataMap = new Map<string, number>();
-
-    transactions.forEach(t => {
-        const date = new Date(t.created_at);
-        // สร้าง Key สำหรับจัดกลุ่มรายเดือน (YYYY-MM)
-        const monthKey = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-        // สร้าง Label ที่อ่านง่ายสำหรับแสดงบนกราฟ (แต่ไม่ใช้ตรงนี้)
-        
-        let change = 0;
-        if (t.type === 'ADD') {
-            change = t.quantity_change;
-        } else if (t.type === 'REMOVE') {
-            change = -t.quantity_change; // การเบิกใช้คือค่าติดลบ
-        }
-
-        // รวมค่า netChange (ADD - REMOVE) ในเดือนนั้นๆ
-        const currentNet = monthlyDataMap.get(monthKey) || 0;
-        monthlyDataMap.set(monthKey, currentNet + change);
-    });
-
-    // 6. แปลง Map เป็น Array และจัดเรียงตาม Key (YYYY-MM)
-    const sortedKeys = Array.from(monthlyDataMap.keys()).sort();
-
-    const result: ChartDataPoint[] = sortedKeys.map(key => {
-        const [year, month] = key.split('-');
-        const date = new Date(parseInt(year), parseInt(month) - 1);
-        // ใช้ _monthLabel ใน struct จริง ๆ เท่านั้น
-        return {
-            _monthLabel: date.toLocaleString('th-TH', { month: 'short', year: '2-digit' }),
-            netChange: monthlyDataMap.get(key) || 0,
-        };
-    });
-
-    // แสดงเฉพาะ 12 เดือนล่าสุด (Optional)
-    return result.slice(-12);
-};
-
-// 7. Component หลัก
 const MonthlyChart: React.FC = () => {
-    const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+    const [chartData, setChartData] = useState<MonthlyData[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        const loadData = async () => {
+        const fetchData = async () => {
             setIsLoading(true);
-            const data = await fetchDataAndTransform();
-            setChartData(data);
+
+            // 1. ดึงข้อมูลย้อนหลัง 12 เดือน (เดือนปัจจุบัน + ย้อนหลัง 11 เดือน)
+            const d = new Date();
+            d.setMonth(d.getMonth() - 11); // ย้อนหลัง 11 เดือน + เดือนปัจจุบัน = 12 เดือน
+            d.setDate(1);
+            d.setHours(0, 0, 0, 0);
+
+            const { data: transactions, error } = await supabase
+                .from('transactions')
+                .select('created_at, type, quantity_change')
+                .gte('created_at', d.toISOString())
+                .order('created_at', { ascending: true });
+
+            if (error) {
+                console.error('Error fetching chart data:', error);
+                setIsLoading(false);
+                return;
+            }
+
+            // 2. จัดกลุ่มข้อมูลรายเดือน (แยก รับ/ใช้)
+            const groupedData = new Map<string, MonthlyData>();
+
+            transactions?.forEach((t: any) => {
+                // ต้องทำเวลาตามเขตไทย
+                const dateObj = new Date(t.created_at);
+                const thaiTime = new Date(dateObj.getTime() + (7 * 60 * 60 * 1000)); // +7 hours
+
+                const key = thaiTime.toISOString().slice(0, 7); // YYYY-MM
+
+                const label = thaiTime.toLocaleDateString('th-TH', {
+                    month: 'short',
+                    year: '2-digit'
+                });
+
+                if (!groupedData.has(key)) {
+                    groupedData.set(key, {
+                        monthLabel: label,
+                        received: 0,
+                        used: 0,
+                        sortKey: key
+                    });
+                }
+
+                const current = groupedData.get(key)!;
+                if (t.type === 'ADD') {
+                    current.received += t.quantity_change;
+                } else if (t.type === 'REMOVE') {
+                    current.used += t.quantity_change; // ห้ามลบ - ใส่ค่าบวก!
+                }
+            });
+
+            // 3. แปลงกลับเป็น Array และเรียงลำดับ
+            const result = Array.from(groupedData.values()).sort((a, b) =>
+                a.sortKey.localeCompare(b.sortKey)
+            );
+
+            setChartData(result);
             setIsLoading(false);
         };
-        loadData();
+
+        fetchData();
     }, []);
 
-    // 8. การจัดโครงสร้างข้อมูลให้ Chart.js
-    const dataForChart = {
-        labels: chartData.map(d => d._monthLabel),
+    const data = {
+        labels: chartData.map(d => d.monthLabel),
         datasets: [
             {
-                label: 'ยอดเปลี่ยนแปลงสุทธิ (หน่วยรวม)',
-                data: chartData.map(d => d.netChange),
-                borderColor: 'rgb(79, 70, 229)', // indigo-600
-                backgroundColor: 'rgba(79, 70, 229, 0.5)',
-                tension: 0.4, // ทำให้กราฟดูโค้งมน
+                label: 'ยอดรับเข้า (เพิ่ม)',
+                data: chartData.map(d => d.received),
+                backgroundColor: 'rgba(34, 197, 94, 0.8)', // สีเขียว (Green-500)
+                borderColor: '#16a34a',
+                borderWidth: 1,
+                borderRadius: 4,
+                barPercentage: 0.6,
+                categoryPercentage: 0.8,
+                datalabels: {
+                    anchor: 'end',
+                    align: 'start',
+                    color: '#16a34a',
+                    font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
+                    formatter: (value: any) => value > 0 ? value : '',
+                },
+            },
+            {
+                label: 'ยอดเบิกใช้ (ลด)',
+                data: chartData.map(d => d.used),
+                backgroundColor: 'rgba(239, 68, 68, 0.8)', // สีแดง (Red-500)
+                borderColor: '#dc2626',
+                borderWidth: 1,
+                borderRadius: 4,
+                barPercentage: 0.6,
+                categoryPercentage: 0.8,
+                datalabels: {
+                    anchor: 'end',
+                    align: 'end',
+                    color: '#dc2626',
+                    font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
+                    formatter: (value: any) => value > 0 ? value : '',
+                },
             },
         ],
     };
 
-    // 9. ตัวเลือกของกราฟ
     const options = {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
             legend: {
                 position: 'top' as const,
+                align: 'end' as const,
+                labels: {
+                    font: { family: "'Kanit', sans-serif", size: 12 },
+                    usePointStyle: true,
+                    boxWidth: 8,
+                }
             },
-            title: {
+            tooltip: {
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                titleColor: '#1f2937',
+                bodyColor: '#1f2937',
+                borderColor: '#e5e7eb',
+                borderWidth: 1,
+                titleFont: { family: "'Kanit', sans-serif", size: 14 },
+                bodyFont: { family: "'Kanit', sans-serif", size: 13 },
+                callbacks: {
+                    label: function(context: any) {
+                        let label = context.dataset.label || '';
+                        if (label) {
+                            label += ': ';
+                        }
+                        if (context.parsed.y !== null) {
+                            label += context.parsed.y + ' หน่วย';
+                        }
+                        return label;
+                    }
+                }
+            },
+            datalabels: {
                 display: true,
-                text: 'ยอดเปลี่ยนแปลงสต็อกสุทธิ 12 เดือนล่าสุด (รวมทุกสาขา)',
-            },
+                clamp: true,
+                // If you want to control global datalabels, though we set per-dataset above
+            }
         },
         scales: {
             y: {
-                title: {
-                    display: true,
-                    text: 'ปริมาณสินค้า (หน่วย)',
+                beginAtZero: true,
+                grid: {
+                    color: '#f3f4f6',
+                },
+                ticks: {
+                    font: { family: "'Kanit', sans-serif" }
+                }
+            },
+            x: {
+                grid: {
+                    display: false
+                },
+                ticks: {
+                    font: { family: "'Kanit', sans-serif" }
                 }
             }
-        }
+        },
+        interaction: {
+            mode: 'index' as const,
+            intersect: false,
+        },
     };
 
-    if (isLoading) return <div className="text-center p-8 text-gray-500">กำลังโหลดข้อมูลกราฟ...</div>;
-    if (chartData.length === 0) return <div className="text-center p-8 text-gray-500">ไม่พบข้อมูลการทำรายการในระบบ</div>;
+    if (isLoading) return (
+        <div className="h-64 flex items-center justify-center text-slate-400">
+            <div className="animate-spin h-8 w-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full mr-3"></div>
+            กำลังโหลดข้อมูล...
+        </div>
+    );
+
+    if (chartData.length === 0) return (
+        <div className="h-64 flex flex-col items-center justify-center text-slate-400 bg-slate-50 rounded-xl border-2 border-dashed border-slate-200">
+            <span className="text-4xl mb-2">📊</span>
+            <p>ยังไม่มีข้อมูลธุรกรรมในรอบปีนี้</p>
+        </div>
+    );
 
     return (
-        <div className="w-full h-96">
-            <Line options={options} data={dataForChart} />
+        <div className="w-full h-[350px]"> {/* กำหนดความสูงให้กราฟ */}
+            <Bar options={options} data={data} plugins={[ChartDataLabels]} />
         </div>
     );
 };
