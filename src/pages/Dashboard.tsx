@@ -104,7 +104,6 @@ const Dashboard: React.FC = () => {
                 .from('stock')
                 .select('id, current_quantity, products(name, min_alert_quantity, unit), branches(id, branch_name)');
 
-            // --- FIXED: Use both product name and unit as key, do not collapse all branches' product remaining under same 'prodName' only ---
             const alerts: StockAlertLowStockItem[] = [];
             const branchStatusMap = new Map<string, 'good' | 'warning' | 'critical'>();
             // KEY FIX: Key by name/unit pair
@@ -149,7 +148,9 @@ const Dashboard: React.FC = () => {
                 setBranches(mappedBranches);
             }
 
-            const { start: thaiMidnightStart, end: thaiMidnightEnd } = getTodayThaiMidnightRange();
+            // Remove unused destructured variables
+            // const { start: thaiMidnightStart, end: thaiMidnightEnd } = getTodayThaiMidnightRange();
+            // const { start: thaiMonthStart, end: thaiMonthEnd } = getThisThaiMonthRange();
             const { start: thaiMonthStart, end: thaiMonthEnd } = getThisThaiMonthRange();
 
             // fetch transactions, but obviously exclude deleted, and only in current Thai month
@@ -217,7 +218,7 @@ const Dashboard: React.FC = () => {
 
             // Key bugfix: match by composite name/unit key
             const productRemainingByKey = new Map<string, number>();
-            allProdNamesWithUnit.forEach(({unit}, prodKey) => {
+            allProdNamesWithUnit.forEach((_value, prodKey) => {
                 productRemainingByKey.set(prodKey, productRemainingMap.get(prodKey) || 0);
             });
 
@@ -459,7 +460,6 @@ const Dashboard: React.FC = () => {
             {/* Shipment Modal */}
             {isShipmentOpen && (
                 <AdminShipmentModal
-                    open={isShipmentOpen}
                     onClose={() => setIsShipmentOpen(false)}
                     onSuccess={() => {
                         setIsShipmentOpen(false);

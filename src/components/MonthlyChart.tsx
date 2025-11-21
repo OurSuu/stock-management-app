@@ -11,12 +11,7 @@ import {
     Tooltip,
     Legend,
 } from 'chart.js';
-// Import types using type-only imports to fix TS verbatimModuleSyntax errors
-import type {
-    ChartOptions,
-    ChartData,
-    ChartDataset,
-} from 'chart.js';
+// Removed unused type-only imports to fix TS6192 error
 // @ts-ignore-next-line
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -164,7 +159,7 @@ const MonthlyChart: React.FC = () => {
         maintainAspectRatio: false,
         layout: { padding: { top: 20 } },
         plugins: {
-            legend: { position: 'top' as const, align: 'end' as const, labels: { font: { family: "'Kanit', sans-serif" }, usePointStyle: true } },
+            legend: { position: 'top', align: 'end', labels: { font: { family: "'Kanit', sans-serif" }, usePointStyle: true } },
             tooltip: {
                 enabled: true,
                 titleFont: { family: "'Kanit', sans-serif", size: 14 },
@@ -192,7 +187,7 @@ const MonthlyChart: React.FC = () => {
             y: { beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { font: { family: "'Kanit', sans-serif" } } },
             x: { grid: { display: false }, ticks: { font: { family: "'Kanit', sans-serif" } } }
         },
-        interaction: { mode: 'nearest' as const, axis: 'x' as const, intersect: false },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
     };
 
     if (isLoading) return (
