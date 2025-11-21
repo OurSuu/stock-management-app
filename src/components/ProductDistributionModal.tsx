@@ -55,10 +55,13 @@ const ProductDistributionModal: React.FC<{
                 .select('current_quantity, branches(branch_name)')
                 .eq('product_id', selectedProduct);
 
-            const formattedData: BranchStockData[] = (data || []).map((item: any) => ({
-                branch_name: item.branches?.branch_name || 'ไม่ระบุสาขา',
-                quantity: item.current_quantity
-            }));
+            // ✅ เพิ่มบรรทัดนี้: กรองเอาเฉพาะที่มากกว่า 0 (ไม่เอาติดลบ ไม่เอา 0)
+            const formattedData: BranchStockData[] = (data || [])
+                .filter((item: any) => item.current_quantity > 0)
+                .map((item: any) => ({
+                    branch_name: item.branches?.branch_name || 'ไม่ระบุสาขา',
+                    quantity: item.current_quantity
+                }));
 
             const sortedData = formattedData.sort((a, b) => {
                 return sortOrder === 'desc' 
