@@ -10,8 +10,10 @@ import {
     Title,
     Tooltip,
     Legend,
-    ChartOptions,
+    // ChartOptions must be imported type-only
 } from 'chart.js';
+// Fixed: type-only import for ChartOptions as required by TS1484
+import type { ChartOptions } from 'chart.js';
 // Removed unused type-only imports to fix TS6192 error
 // @ts-ignore-next-line
 import ChartDataLabels from 'chartjs-plugin-datalabels';

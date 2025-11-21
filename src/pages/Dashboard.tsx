@@ -67,7 +67,9 @@ const Dashboard: React.FC = () => {
         return { start, end };
     };
 
-    // Utility: return Thai "today" range (midnight to next midnight Thailand time) in ISO
+    // NOTE: getTodayThaiMidnightRange ถูกคอมเมนต์ไว้เพื่อไม่ให้ build error time-zone หายไปจากโค้ด
+    // ถ้าในอนาคตต้องใช้ ให้ uncomment ได้เลย
+    /*
     const getTodayThaiMidnightRange = () => {
         const now = new Date();
         const bangkokNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
@@ -80,6 +82,7 @@ const Dashboard: React.FC = () => {
         const end = new Date(todayEnd.getTime() - (todayEnd.getTimezoneOffset() * 60000)).toISOString();
         return { start, end };
     };
+    */
 
     function getOrInit(map: Map<string, UsageSummary>, name: string, unit: string): UsageSummary {
         const key = `${name}###${unit}`;
