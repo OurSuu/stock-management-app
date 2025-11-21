@@ -10,7 +10,16 @@ import CreateProductModal from '../components/CreateProductModal';
 import ProductDistributionModal from '../components/ProductDistributionModal';
 import BranchDetailModal from '../components/BranchDetailModal';
 
-type BranchSummary = { id: string; branch_name: string; status: 'good' | 'warning' | 'critical'; total_stock_value: number; };
+import AdminOrderManager from '../components/AdminOrderManager';
+import AdminShipmentModal from '../components/AdminShipmentModal';
+
+type BranchSummary = { 
+    id: string; 
+    branch_name: string; 
+    status: 'good' | 'warning' | 'critical'; 
+    total_stock_value: number; 
+    hasDelivery?: boolean; 
+};
 type UsageSummary = { name: string; unit: string; received: number; used: number; remaining: number; };
 
 import type { LowStockItem as StockAlertLowStockItem } from '../components/StockAlerts';
@@ -28,78 +37,90 @@ const Dashboard: React.FC = () => {
 
     const [selectedBranchId, setSelectedBranchId] = useState<{id: string, name: string} | null>(null);
 
+    const [isShipmentOpen, setIsShipmentOpen] = useState(false);
+
     const handleAlertClick = (branchId: string, branchName: string) => {
         if (!branchId) return;
         setSelectedBranchId({ id: branchId, name: branchName });
     };
 
-    const isMounted = useRef(true);
+    const isMounted = useRef(false);
 
     useEffect(() => {
         isMounted.current = true;
         return () => { isMounted.current = false; };
     }, []);
 
-    // ช่วยฟังก์ชันสร้างช่วงเวลาเป็น ISO string ของ "วันนี้" (0:00-0:00 วันถัดไป) ตามเวลาประเทศไทย (UTC+7)
+    // Utility: return Thai day range in ISO (midnight-midnight)
     const getTodayThaiMidnightRange = () => {
         const now = new Date();
-        // เวลาไทยจริงๆ
-        const nowInBangkok = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-        nowInBangkok.setHours(0, 0, 0, 0);
-        // ตอน 0:00 วันนี้
-        const todayStartBangkok = new Date(nowInBangkok);
-        // ตอน 0:00 วันถัดไป
-        const tomorrow = new Date(todayStartBangkok);
-        tomorrow.setDate(todayStartBangkok.getDate() + 1);
+        const bangkok = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+        bangkok.setHours(0,0,0,0);
+        const todayStart = new Date(bangkok);
+        const tomorrow = new Date(bangkok);
+        tomorrow.setDate(bangkok.getDate() + 1);
 
-        // กลับไปหาเวลา UTC ที่ตรงกับ 0:00 ไทย และ 0:00 ไทยวันถัดไป (ขอเป็น ISO ของ UTC)
-        const start = new Date(todayStartBangkok.getTime() - (todayStartBangkok.getTimezoneOffset() * 60000)).toISOString();
+        const start = new Date(todayStart.getTime() - (todayStart.getTimezoneOffset() * 60000)).toISOString();
         const end = new Date(tomorrow.getTime() - (tomorrow.getTimezoneOffset() * 60000)).toISOString();
-
         return { start, end };
     };
 
-    // คืนช่วงต้นเดือน-ต้นเดือนถัดไป ตามเวลาประเทศไทยเหมือนกัน
+    // Utility: return Thai month range (first day - first day next month) in ISO
     const getThisThaiMonthRange = () => {
         const now = new Date();
-        const nowInBangkok = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-        // set เป็นวันแรกของเดือน
-        nowInBangkok.setDate(1);
-        nowInBangkok.setHours(0, 0, 0, 0);
+        const bangkok = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+        bangkok.setDate(1);
+        bangkok.setHours(0,0,0,0);
 
-        const monthStart = new Date(nowInBangkok);
+        const monthStart = new Date(bangkok);
         const monthEnd = new Date(monthStart);
-        monthEnd.setMonth(monthStart.getMonth() + 1);
+        monthEnd.setMonth(monthEnd.getMonth() + 1);
 
-        // กลับ timeUTC ของไทย (ใช้ for query)
         const start = new Date(monthStart.getTime() - (monthStart.getTimezoneOffset() * 60000)).toISOString();
         const end = new Date(monthEnd.getTime() - (monthEnd.getTimezoneOffset() * 60000)).toISOString();
         return { start, end };
     };
 
+    function getOrInit(map: Map<string, UsageSummary>, name: string, unit: string): UsageSummary {
+        const key = `${name}###${unit}`;
+        let entry = map.get(key);
+        if (!entry) {
+            entry = { name, unit, received: 0, used: 0, remaining: 0 };
+            map.set(key, entry);
+        }
+        return entry;
+    }
+
     const fetchData = useCallback(async () => {
         try {
-            // 1. ข้อมูลสาขา
-            const { data: branchData } = await supabase.from('branches').select('*').order('branch_name');
+            // fetch branch info
+            const { data: branchData } = await supabase
+                .from('branches')
+                .select('*, orders(status)')
+                .order('branch_name');
 
-            // 2. ข้อมูล stock และข้อมูลสินค้า/unit
+            // fetch stock info
             const { data: allStock } = await supabase
                 .from('stock')
                 .select('id, current_quantity, products(name, min_alert_quantity, unit), branches(id, branch_name)');
 
-            // Map สำหรับสถานะ/alarm ของสาขา + รวมคงเหลือราย product
+            // --- FIXED: Use both product name and unit as key, do not collapse all branches' product remaining under same 'prodName' only ---
             const alerts: StockAlertLowStockItem[] = [];
             const branchStatusMap = new Map<string, 'good' | 'warning' | 'critical'>();
+            // KEY FIX: Key by name/unit pair
             const productRemainingMap = new Map<string, number>();
 
             allStock?.forEach((item: any) => {
-                const qty = item.current_quantity;
-                const min = item.products?.min_alert_quantity || 0;
+                const qty = Number(item.current_quantity);
+                const min = Number(item.products?.min_alert_quantity) || 0;
                 const branchId = item.branches?.id || '';
                 const prodName = item.products?.name || 'Unknown';
+                const unit = item.products?.unit || '';
 
-                const currentTotal = productRemainingMap.get(prodName) ?? 0;
-                productRemainingMap.set(prodName, currentTotal + qty);
+                // Fix: key should consider unit for correct grouping
+                const prodKey = `${prodName}###${unit}`;
+                const currentTotal = productRemainingMap.get(prodKey) ?? 0;
+                productRemainingMap.set(prodKey, currentTotal + qty);
 
                 if (qty <= min) {
                     alerts.push({
@@ -109,7 +130,7 @@ const Dashboard: React.FC = () => {
                         product_name: prodName,
                         current_quantity: qty,
                         min_alert: min,
-                        unit: item.products?.unit || ''
+                        unit: unit
                     });
                     const currentStatus = branchStatusMap.get(branchId) || 'good';
                     if (qty === 0) branchStatusMap.set(branchId, 'critical');
@@ -122,102 +143,110 @@ const Dashboard: React.FC = () => {
                 const mappedBranches: BranchSummary[] = (branchData || []).map((b: any) => ({
                     ...b,
                     status: branchStatusMap.get(b.id) || 'good',
-                    total_stock_value: 0
+                    total_stock_value: 0,
+                    hasDelivery: Array.isArray(b.orders) && b.orders.some((o: any) => o.status === 'IN_TRANSIT')
                 }));
                 setBranches(mappedBranches);
             }
 
-            // ===== เงื่อนไขเวลาไทย เพื่อ filter รายการ txn รายวัน/เดือน =====
             const { start: thaiMidnightStart, end: thaiMidnightEnd } = getTodayThaiMidnightRange();
             const { start: thaiMonthStart, end: thaiMonthEnd } = getThisThaiMonthRange();
 
-            // Query สำหรับช่วงเดือนไทย (และใช้ determine ว่าธุรกรรมในวันไทยไหม)
+            // fetch transactions, but obviously exclude deleted, and only in current Thai month
             const { data: txnData } = await supabase
                 .from('transactions')
                 .select('*, products(name, unit)')
                 .gte('created_at', thaiMonthStart)
-                .lt('created_at', thaiMonthEnd);
+                .lt('created_at', thaiMonthEnd)
+                .neq('deleted', true);
 
-            // ===== เตรียม product master (ชื่อสินค้า+unit) =====
+            // product name + unit as keys for consistent display (also fixes rare NaN)
             const allProdNamesWithUnit = new Map<string, { unit: string }>();
             allStock?.forEach((item: any) => {
                 const prodName = item.products?.name || 'Unknown';
                 const unit = item.products?.unit || '';
-                if (!allProdNamesWithUnit.has(prodName)) {
-                    allProdNamesWithUnit.set(prodName, { unit });
+                const prodKey = `${prodName}###${unit}`;
+                if (!allProdNamesWithUnit.has(prodKey)) {
+                    allProdNamesWithUnit.set(prodKey, { unit });
                 }
             });
 
-            // === (1) รวมธุรกรรม "รายวัน/เดือน" แบบไทย  ===
-            // เปลี่ยน logic โดยนับ ADD ทั้งหมดในเดือน/วัน ของทุก branch ให้รวม
-            // และนับ USED ทั้งหมดเช่นกัน เพื่อให้ยอดรับเข้า "รวมรับ" ถูกต้อง
+            const monthMap = new Map<string, UsageSummary>();
+            const todayMap = new Map<string, UsageSummary>();
 
-            type TxnAgg = { received: number; used: number; };
+            // คำนวณวันที่และเดือนปัจจุบันใน timezone ไทย (ISO)
+            const now = new Date();
+            const todayStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+            const currentMonthStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' });
 
-            // เก็บ summary ต่อชื่อวัตถุดิบ-หน่วย
-            const monthAggMap = new Map<string, TxnAgg>();
-            const todayAggMap = new Map<string, TxnAgg>();
-
-            // Helper สำหรับ key
-            const prodKey = (name: string, unit: string) => `${name}###${unit}`;
-
+            // ใช้ Loop และ Logic ตามเป้าหมายใหม่
             txnData?.forEach((t: any) => {
-                const createdAtUTC = t.created_at;
+                const txnDate = new Date(t.created_at);
+
+                // แปลงเป็นวันที่ไทย YYYY-MM-DD
+                const txnDateStr = txnDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
+                const txnMonthStr = txnDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit' });
+
                 const prodName = t.products?.name || 'สินค้าไม่ระบุชื่อ';
                 const unit = t.products?.unit || '';
-                const qty = t.quantity_change;
+                const qty = Number(t.quantity_change);
                 const type = t.type;
 
-                // เดือน: สะสมรับและใช้
-                const monthK = prodKey(prodName, unit);
-                const monthVal = monthAggMap.get(monthK) || { received: 0, used: 0 };
-                if (type === 'ADD') monthVal.received += qty;
-                else monthVal.used += Math.abs(qty);
-                monthAggMap.set(monthK, monthVal);
+                // ฟังก์ชันช่วยคำนวณ (รวม Logic ใหม่ตรงนี้)
+                const updateSummary = (item: UsageSummary) => {
+                    if (type === 'ADD') {
+                        item.received += qty;
+                    } else if (type === 'REMOVE') {
+                        item.used += Math.abs(qty);
+                    } else if (type === 'RESTORE') {
+                        // ✅ แก้ไข: ถ้ารายการเป็นกู้คืน ให้เอาไป "ลบออกจากยอดใช้"
+                        item.used -= Math.abs(qty);
+                    }
+                };
 
-                // วัน: ต้องอยู่ในช่วงวันไทยด้วย
-                const inThaiToday = (createdAtUTC >= thaiMidnightStart && createdAtUTC < thaiMidnightEnd);
-                if (inThaiToday) {
-                    const todayK = prodKey(prodName, unit);
-                    const todayVal = todayAggMap.get(todayK) || { received: 0, used: 0 };
-                    if (type === 'ADD') todayVal.received += qty;
-                    else todayVal.used += Math.abs(qty);
-                    todayAggMap.set(todayK, todayVal);
+                // 1. ยอดเดือน
+                if (txnMonthStr === currentMonthStr) {
+                    updateSummary(getOrInit(monthMap, prodName, unit));
+                }
+
+                // 2. ยอดวัน
+                if (txnDateStr === todayStr) {
+                    updateSummary(getOrInit(todayMap, prodName, unit));
                 }
             });
 
-            // (1.1) เตรียมคงเหลือรวมของแต่ละ product
+            // Key bugfix: match by composite name/unit key
             const productRemainingByKey = new Map<string, number>();
-            allProdNamesWithUnit.forEach(({unit}, name) => {
-                const key = prodKey(name, unit);
-                productRemainingByKey.set(key, productRemainingMap.get(name) || 0);
+            allProdNamesWithUnit.forEach(({unit}, prodKey) => {
+                productRemainingByKey.set(prodKey, productRemainingMap.get(prodKey) || 0);
             });
 
-            // (2) สร้าง UsageSummary ของเดือน
+            // Month totals
             const monthSummaries: UsageSummary[] = [];
-            allProdNamesWithUnit.forEach(({ unit }, name) => {
-                const key = prodKey(name, unit);
-                const agg = monthAggMap.get(key) || { received: 0, used: 0 };
+            allProdNamesWithUnit.forEach(({ unit }, prodKey) => {
+                // Parse the prodKey back to just the product name for display
+                const [name] = prodKey.split('###');
+                const agg = monthMap.get(prodKey) || { name, unit, received: 0, used: 0, remaining: 0 };
                 monthSummaries.push({
                     name,
                     unit,
                     received: agg.received,
                     used: agg.used,
-                    remaining: productRemainingByKey.get(key) || 0
+                    remaining: productRemainingByKey.get(prodKey) || 0
                 });
             });
 
-            // (3) สร้าง UsageSummary ของวัน
+            // Today totals
             const todaySummaries: UsageSummary[] = [];
-            allProdNamesWithUnit.forEach(({ unit }, name) => {
-                const key = prodKey(name, unit);
-                const agg = todayAggMap.get(key) || { received: 0, used: 0 };
+            allProdNamesWithUnit.forEach(({ unit }, prodKey) => {
+                const [name] = prodKey.split('###');
+                const agg = todayMap.get(prodKey) || { name, unit, received: 0, used: 0, remaining: 0 };
                 todaySummaries.push({
                     name,
                     unit,
                     received: agg.received,
                     used: agg.used,
-                    remaining: productRemainingByKey.get(key) || 0
+                    remaining: productRemainingByKey.get(prodKey) || 0
                 });
             });
 
@@ -233,7 +262,6 @@ const Dashboard: React.FC = () => {
         } finally {
             if (isMounted.current) setIsLoading(false);
         }
-
     }, []);
 
     useEffect(() => {
@@ -250,7 +278,7 @@ const Dashboard: React.FC = () => {
         );
     }
 
-    // สำหรับแสดงวันที่ปัจจุบัน (แบบไทย, เขต Bangkok)
+    // Show Thai formatted today date (Bangkok)
     const displayTodayThai = () => {
         const now = new Date();
         return new Intl.DateTimeFormat('th-TH', {
@@ -273,20 +301,39 @@ const Dashboard: React.FC = () => {
                     <button onClick={() => setIsDistributionOpen(true)} className="flex items-center bg-purple-600 text-white px-5 py-2.5 rounded-xl shadow-lg hover:bg-purple-700 hover:shadow-purple-200 transition transform hover:-translate-y-0.5 font-bold ml-3">
                         <span className="text-xl mr-2">🏆</span> ดูอันดับสต็อก
                     </button>
+                    <button
+                        onClick={() => setIsShipmentOpen(true)}
+                        className="flex items-center bg-lime-600 text-white px-5 py-2.5 rounded-xl shadow-lg hover:bg-lime-700 hover:shadow-lime-200 transition transform hover:-translate-y-0.5 font-bold ml-3"
+                    >
+                        <span className="text-xl mr-2">🚚</span> ส่งของให้สาขา
+                    </button>
                 </div>
             </div>
 
+            {/* --- Main Grid --- */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100"><MonthlyChart /></div>
+                {/* Left: Chart + Approvals */}
+                <div className="lg:col-span-2 space-y-6">
+                    <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                        <MonthlyChart />
+                    </div>
+                    {/* Approvals */}
+                    <div className="h-[400px]">
+                        <AdminOrderManager onUpdate={() => {
+                            // intentionally left blank for now
+                        }} />
+                    </div>
+                </div>
+                {/* Right: Low Stock Alerts */}
                 <div className="lg:col-span-1 h-full">
                     <StockAlerts
                         items={lowStockItems}
-                        onBranchClick={(id, name) => handleAlertClick(id, name)}
+                        onBranchClick={handleAlertClick}
                     />
                 </div>
             </div>
 
-            {/* สรุปผลรวมวัตถุดิบทุกสาขา */}
+            {/* Stock Summary Section */}
             <div className="bg-indigo-900 rounded-3xl p-8 text-white shadow-xl overflow-hidden relative">
                 <div className="absolute top-0 right-0 w-64 h-64 bg-white opacity-5 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl"></div>
                 <h2 className="text-2xl font-bold mb-6 relative z-10 flex items-center">
@@ -294,7 +341,7 @@ const Dashboard: React.FC = () => {
                     <button onClick={() => { setIsLoading(true); fetchData(); }} className="ml-3 text-xs bg-indigo-700 hover:bg-indigo-600 px-2 py-1 rounded text-indigo-200 transition cursor-pointer">↻ รีเฟรช</button>
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
-                    {/* รายวัน */}
+                    {/* Daily */}
                     <div className="bg-white/10 rounded-2xl p-6 backdrop-blur-sm border border-white/10">
                         <div className="flex justify-between items-center mb-4 border-b border-white/20 pb-2">
                             <h3 className="font-bold text-indigo-200">📅 วันนี้ ({displayTodayThai()})</h3>
@@ -339,7 +386,7 @@ const Dashboard: React.FC = () => {
                             </ul>
                         )}
                     </div>
-                    {/* รายเดือน */}
+                    {/* Monthly */}
                     <div className="bg-white/10 rounded-2xl p-6 backdrop-blur-sm border border-white/10">
                         <div className="flex justify-between items-center mb-4 border-b border-white/20 pb-2">
                             <h3 className="font-bold text-orange-200">🗓️ เดือนนี้</h3>
@@ -391,7 +438,13 @@ const Dashboard: React.FC = () => {
             <div className="pt-4">
                 <h2 className="text-2xl font-bold text-slate-800 mb-6 flex items-center">🏪 จัดการสาขา</h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {branches.map((branch) => <BranchCard key={branch.id} branch={branch} />)}
+                    {branches.map((branch) => (
+                        <BranchCard 
+                            key={branch.id}
+                            branch={branch}
+                            hasDelivery={branch.hasDelivery}
+                        />
+                    ))}
                     <button onClick={() => setIsCreateBranchOpen(true)} className="group flex flex-col items-center justify-center h-[200px] rounded-3xl border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 hover:bg-indigo-50/50 transition-all cursor-pointer">
                         <div className="w-12 h-12 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-400 group-hover:text-indigo-600 group-hover:border-indigo-200 transition-colors shadow-sm mb-3">+</div>
                         <span className="font-semibold text-slate-500 group-hover:text-indigo-600 transition-colors">เพิ่มสาขาใหม่</span>
@@ -403,7 +456,20 @@ const Dashboard: React.FC = () => {
             {isCreateProductOpen && (<CreateProductModal onClose={() => setIsCreateProductOpen(false)} onSuccess={() => {}} />)}
             {isDistributionOpen && (<ProductDistributionModal onClose={() => setIsDistributionOpen(false)} />)}
 
-            {/* เพิ่ม modal สำหรับแสดงรายละเอียดสาขา */}
+            {/* Shipment Modal */}
+            {isShipmentOpen && (
+                <AdminShipmentModal
+                    open={isShipmentOpen}
+                    onClose={() => setIsShipmentOpen(false)}
+                    onSuccess={() => {
+                        setIsShipmentOpen(false);
+                        setIsLoading(true);
+                        fetchData();
+                    }}
+                />
+            )}
+
+            {/* Branch detail modal */}
             {selectedBranchId && (
                 <BranchDetailModal 
                     branchId={selectedBranchId.id}

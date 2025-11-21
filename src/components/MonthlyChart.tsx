@@ -35,6 +35,10 @@ type MonthlyData = {
     received: number;
     used: number;
     sortKey: string;
+    details: {
+        received: { [key: string]: number };
+        used: { [key: string]: number };
+    };
 };
 
 const MonthlyChart: React.FC = () => {
@@ -45,7 +49,6 @@ const MonthlyChart: React.FC = () => {
         const fetchData = async () => {
             setIsLoading(true);
 
-            // 1. ดึงข้อมูลย้อนหลัง 12 เดือน (เดือนปัจจุบัน + ย้อนหลัง 11 เดือน)
             const d = new Date();
             d.setMonth(d.getMonth() - 11);
             d.setDate(1);
@@ -53,12 +56,12 @@ const MonthlyChart: React.FC = () => {
 
             const { data: transactions, error } = await supabase
                 .from('transactions')
-                .select('created_at, type, quantity_change')
+                .select('created_at, type, quantity_change, products(name, unit)')
                 .gte('created_at', d.toISOString())
                 .order('created_at', { ascending: true });
 
             if (error) {
-                console.error('Error fetching chart data:', error);
+                console.error('Error:', error);
                 setIsLoading(false);
                 return;
             }
@@ -67,34 +70,54 @@ const MonthlyChart: React.FC = () => {
 
             transactions?.forEach((t: any) => {
                 const dateObj = new Date(t.created_at);
-                const thaiTime = new Date(dateObj.getTime() + (7 * 60 * 60 * 1000)); // +7 hours
-                const key = thaiTime.toISOString().slice(0, 7); // YYYY-MM
-                const label = thaiTime.toLocaleDateString('th-TH', {
-                    month: 'short',
-                    year: '2-digit'
-                });
+                const thaiTime = new Date(dateObj.getTime() + (7 * 60 * 60 * 1000));
+                const key = thaiTime.toISOString().slice(0, 7);
+                const label = thaiTime.toLocaleDateString('th-TH', { month: 'short', year: '2-digit' });
+
+                const prodName = t.products?.name || 'ไม่ระบุ';
+                const qty = t.quantity_change;
 
                 if (!groupedData.has(key)) {
                     groupedData.set(key, {
                         monthLabel: label,
                         received: 0,
                         used: 0,
-                        sortKey: key
+                        sortKey: key,
+                        details: { received: {}, used: {} }
                     });
                 }
 
                 const current = groupedData.get(key)!;
+
+                // Helper เพื่อบวกยอดรายสินค้า
+                const addDetail = (type: 'received' | 'used', name: string, amount: number) => {
+                    if (!current.details[type][name]) current.details[type][name] = 0;
+                    current.details[type][name] += amount;
+                    // ถ้าลบกันแล้วเหลือ 0 หรือติดลบ ให้ลบ key ออก (จะได้ไม่รก)
+                    if (current.details[type][name] <= 0) delete current.details[type][name];
+                };
+
                 if (t.type === 'ADD') {
-                    current.received += t.quantity_change;
+                    current.received += qty;
+                    addDetail('received', prodName, qty);
                 } else if (t.type === 'REMOVE') {
-                    current.used += t.quantity_change;
+                    current.used += Math.abs(qty);
+                    addDetail('used', prodName, Math.abs(qty));
+                } else if (t.type === 'RESTORE') {
+                    // ✅ Logic ใหม่: ถ้ากู้คืน ให้ไป "ลบออกจากยอดใช้"
+                    const absQty = Math.abs(qty);
+                    current.used -= absQty;
+                    // ลดยอดใน details ด้วย (ต้องลบออกจาก used)
+                    if (current.details.used[prodName]) {
+                        current.details.used[prodName] -= absQty;
+                        if (current.details.used[prodName] <= 0) delete current.details.used[prodName];
+                    }
                 }
             });
 
             const result = Array.from(groupedData.values()).sort((a, b) =>
                 a.sortKey.localeCompare(b.sortKey)
             );
-
             setChartData(result);
             setIsLoading(false);
         };
@@ -102,13 +125,12 @@ const MonthlyChart: React.FC = () => {
         fetchData();
     }, []);
 
-    // Fix typing: ChartDataset<'bar', number[]> (NOT number) -- remove "as" casts
-    const data: ChartData<'bar', number[], string> = {
-        labels: chartData.map(d => d.monthLabel),
+    const data = {
+        labels: chartData.map(obj => obj.monthLabel),
         datasets: [
             {
-                label: 'ยอดรับเข้า (เพิ่ม)',
-                data: chartData.map(d => d.received),
+                label: 'รับเข้า',
+                data: chartData.map(obj => obj.received),
                 backgroundColor: 'rgba(34, 197, 94, 0.8)',
                 borderColor: '#16a34a',
                 borderWidth: 1,
@@ -116,16 +138,13 @@ const MonthlyChart: React.FC = () => {
                 barPercentage: 0.6,
                 categoryPercentage: 0.8,
                 datalabels: {
-                    anchor: 'end',
-                    align: 'start' as const,
-                    color: '#16a34a',
-                    font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
-                    formatter: (value: any) => value > 0 ? value : '',
-                },
-            } as ChartDataset<'bar', number[]>,
+                    anchor: 'end' as const, align: 'top' as const, color: '#16a34a', font: { weight: 'bold' as const },
+                    formatter: (value: number) => value > 0 ? value : ''
+                }
+            },
             {
-                label: 'ยอดเบิกใช้ (ลด)',
-                data: chartData.map(d => d.used),
+                label: 'เบิกใช้',
+                data: chartData.map(obj => obj.used),
                 backgroundColor: 'rgba(239, 68, 68, 0.8)',
                 borderColor: '#dc2626',
                 borderWidth: 1,
@@ -133,78 +152,47 @@ const MonthlyChart: React.FC = () => {
                 barPercentage: 0.6,
                 categoryPercentage: 0.8,
                 datalabels: {
-                    anchor: 'end',
-                    align: 'end' as const,
-                    color: '#dc2626',
-                    font: { family: "'Kanit', sans-serif", size: 13, weight: 'bold' },
-                    formatter: (value: any) => value > 0 ? value : '',
-                },
-            } as ChartDataset<'bar', number[]>,
+                    anchor: 'end' as const, align: 'top' as const, color: '#dc2626', font: { weight: 'bold' as const },
+                    formatter: (value: number) => value > 0 ? value : ''
+                }
+            },
         ],
     };
 
-    const options: ChartOptions<'bar'> = {
+    const options = {
         responsive: true,
         maintainAspectRatio: false,
+        layout: { padding: { top: 20 } },
         plugins: {
-            legend: {
-                position: 'top',
-                align: 'end',
-                labels: {
-                    font: { family: "'Kanit', sans-serif", size: 12 },
-                    usePointStyle: true,
-                    boxWidth: 8,
-                }
-            },
+            legend: { position: 'top' as const, align: 'end' as const, labels: { font: { family: "'Kanit', sans-serif" }, usePointStyle: true } },
             tooltip: {
-                backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                titleColor: '#1f2937',
-                bodyColor: '#1f2937',
-                borderColor: '#e5e7eb',
-                borderWidth: 1,
+                enabled: true,
                 titleFont: { family: "'Kanit', sans-serif", size: 14 },
                 bodyFont: { family: "'Kanit', sans-serif", size: 13 },
                 callbacks: {
+                    // ✅ Custom Tooltip: แสดงรายละเอียดสินค้า
                     label: function(context: any) {
-                        let label = context.dataset.label || '';
-                        if (label) {
-                            label += ': ';
-                        }
-                        if (context.parsed.y !== null) {
-                            label += context.parsed.y + ' หน่วย';
-                        }
-                        return label;
+                        const index = context.dataIndex;
+                        const type = context.datasetIndex === 0 ? 'received' : 'used';
+                        const total = context.raw;
+
+                        // ดึงรายละเอียดมาโชว์
+                        const detailsObj = chartData[index].details[type];
+                        const detailsStr = Object.entries(detailsObj)
+                            .map(([name, qty]) => `${name}: ${qty}`)
+                            .join(', ');
+
+                        return [`ยอดรวม: ${total}`, ...(detailsStr ? [`----------`, ...Object.entries(detailsObj).map(([n, q]) => `• ${n}: ${q}`)] : [])];
                     }
                 }
             },
-            datalabels: {
-                display: true,
-                clamp: true,
-            }
+            datalabels: { display: true, font: { family: "'Kanit', sans-serif" } }
         },
         scales: {
-            y: {
-                beginAtZero: true,
-                grid: {
-                    color: '#f3f4f6',
-                },
-                ticks: {
-                    font: { family: "'Kanit', sans-serif" }
-                }
-            },
-            x: {
-                grid: {
-                    display: false
-                },
-                ticks: {
-                    font: { family: "'Kanit', sans-serif" }
-                }
-            }
+            y: { beginAtZero: true, grid: { color: '#f3f4f6' }, ticks: { font: { family: "'Kanit', sans-serif" } } },
+            x: { grid: { display: false }, ticks: { font: { family: "'Kanit', sans-serif" } } }
         },
-        interaction: {
-            mode: 'index',
-            intersect: false,
-        },
+        interaction: { mode: 'nearest' as const, axis: 'x' as const, intersect: false },
     };
 
     if (isLoading) return (
@@ -222,8 +210,8 @@ const MonthlyChart: React.FC = () => {
     );
 
     return (
-        <div className="w-full h-[350px]"> {/* กำหนดความสูงให้กราฟ */}
-            <Bar options={options} data={data} plugins={[ChartDataLabels]} />
+        <div className="w-full h-[350px]">
+            <Bar options={options} data={data} />
         </div>
     );
 };
