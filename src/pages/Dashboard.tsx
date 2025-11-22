@@ -67,23 +67,6 @@ const Dashboard: React.FC = () => {
         return { start, end };
     };
 
-    // NOTE: getTodayThaiMidnightRange ถูกคอมเมนต์ไว้เพื่อไม่ให้ build error time-zone หายไปจากโค้ด
-    // ถ้าในอนาคตต้องใช้ ให้ uncomment ได้เลย
-    /*
-    const getTodayThaiMidnightRange = () => {
-        const now = new Date();
-        const bangkokNow = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
-        bangkokNow.setHours(0, 0, 0, 0);
-        const todayStart = new Date(bangkokNow);
-        const todayEnd = new Date(bangkokNow);
-        todayEnd.setDate(todayEnd.getDate() + 1);
-
-        const start = new Date(todayStart.getTime() - (todayStart.getTimezoneOffset() * 60000)).toISOString();
-        const end = new Date(todayEnd.getTime() - (todayEnd.getTimezoneOffset() * 60000)).toISOString();
-        return { start, end };
-    };
-    */
-
     function getOrInit(map: Map<string, UsageSummary>, name: string, unit: string): UsageSummary {
         const key = `${name}###${unit}`;
         let entry = map.get(key);
@@ -310,16 +293,10 @@ const Dashboard: React.FC = () => {
 
             {/* --- Main Grid --- */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Left: Chart + Approvals */}
-                <div className="lg:col-span-2 space-y-6">
+                {/* Left: Chart */}
+                <div className="lg:col-span-2 flex flex-col gap-6">
                     <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                         <MonthlyChart />
-                    </div>
-                    {/* Approvals */}
-                    <div className="h-[400px]">
-                        <AdminOrderManager onUpdate={() => {
-                            // intentionally left blank for now
-                        }} />
                     </div>
                 </div>
                 {/* Right: Low Stock Alerts */}
@@ -328,6 +305,13 @@ const Dashboard: React.FC = () => {
                         items={lowStockItems}
                         onBranchClick={handleAlertClick}
                     />
+                </div>
+            </div>
+
+            {/* Approval Section - Standalone & Full Width */}
+            <div className="w-full bg-white rounded-3xl shadow-sm border border-slate-100 mb-4">
+                <div className="px-8 py-6">
+                    <AdminOrderManager onUpdate={() => { /* intentionally left blank for now */ }} />
                 </div>
             </div>
 

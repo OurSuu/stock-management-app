@@ -1,6 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 
+// Helper: Format date string (in UTC or ISO format) into Thai date+time using device timezone (assume client in Thailand)
+function formatThaiDateTime(utcDateStr: string) {
+    if (!utcDateStr) return '';
+    // Create date object (assumes ISO string, ex: "2024-04-26T09:00:00.000Z")
+    const date = new Date(utcDateStr);
+
+    // Format using device's (Thailand) local time zone, not manual UTC+7
+    // This will show correct time if user's computer is in time zone Asia/Bangkok (UTC+7)
+    // If you want to force Asia/Bangkok time regardless of device locale, use Intl.DateTimeFormat with a timeZone.
+    try {
+        const thDate = new Intl.DateTimeFormat('th-TH', {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            timeZone: 'Asia/Bangkok'
+        }).format(date);
+
+        const thTime = new Intl.DateTimeFormat('th-TH', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+            timeZone: 'Asia/Bangkok'
+        }).format(date);
+
+        return `${thDate} เวลา ${thTime}`;
+    } catch (e) {
+        // fallback: just show raw date
+        return date.toLocaleString('th-TH');
+    }
+}
+
 const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) => {
     const [orders, setOrders] = useState<any[]>([]);
     const [deliveryDate, setDeliveryDate] = useState('');
@@ -156,7 +187,13 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
                         <div className="flex justify-between items-start mb-3 pl-3">
                             <div>
                                 <h3 className="font-bold text-indigo-700 text-lg">{order.branches?.branch_name}</h3>
-                                <p className="text-xs text-slate-500">ขอรับวันที่: {new Date(order.requested_date).toLocaleDateString('th-TH')}</p>
+                                <p className="text-xs text-slate-500">
+                                    ขอรับวันที่: {new Date(order.requested_date).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' })}
+                                </p>
+                                {/* Show time of when the request was made, in Thai time */}
+                                <p className="text-xs text-slate-400 mt-1">
+                                    ขอเมื่อ: {formatThaiDateTime(order.created_at)}
+                                </p>
                             </div>
                             <span className="bg-yellow-100 text-yellow-700 text-[10px] px-2 py-1 rounded-full font-bold">PENDING</span>
                         </div>
@@ -220,7 +257,12 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
                                     value={deliveryDate}
                                     onChange={e => setDeliveryDate(e.target.value)}
                                 />
-                                <p className="text-xs text-slate-400 mt-1">* วันที่สาขาขอมาคือ: {new Date(confirmingOrder.requested_date).toLocaleDateString('th-TH')}</p>
+                                <p className="text-xs text-slate-400 mt-1">
+                                    * วันที่สาขาขอมาคือ: {new Date(confirmingOrder.requested_date).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' })}
+                                </p>
+                                <p className="text-xs text-slate-400">
+                                    * ส่งคำขอนี้เมื่อ: {formatThaiDateTime(confirmingOrder.created_at)}
+                                </p>
                             </div>
 
                             {/* ปุ่ม Action */}

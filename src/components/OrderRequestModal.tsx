@@ -3,17 +3,50 @@ import { supabase } from '../lib/supabase';
 
 type ProductOption = { id: string; name: string; unit: string };
 
+// ฟังก์ชันเพื่อดึงเวลาปัจจุบันของไทย
+function getCurrentThaiDateTime() {
+    const thaiDate = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' }));
+    return thaiDate;
+}
+
+// แปลง Date ให้อยู่ในรูป YYYY-MM-DD (เพื่อ <input type="date">)
+function dateToDateInputString(date: Date) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+// แปลงวันที่และเวลาไทยเป็น format สวยงาม (เช่น 25 เม.ย. 2567 13:55)
+function formatThaiDateTime(date: Date) {
+    const months = [
+        "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+        "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
+    ];
+    const dateStr = `${date.getDate()} ${months[date.getMonth()]} ${date.getFullYear() + 543}`;
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    return `${dateStr} ${hh}:${mm}`;
+}
+
 const OrderRequestModal: React.FC<{
     branchId: string;
     onClose: () => void;
     onSuccess: () => void;
 }> = ({ branchId, onClose, onSuccess }) => {
     const [products, setProducts] = useState<ProductOption[]>([]);
-    // ใช้ Object เก็บจำนวนสินค้า { "product_id": quantity }
     const [quantities, setQuantities] = useState<{ [key: string]: number }>({});
     const [requestDate, setRequestDate] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // สำหรับเวลาปัจจุบันไทย (อัปเดตทุก 10 วินาที)
+    const [thaiNow, setThaiNow] = useState<Date>(getCurrentThaiDateTime());
+
+    useEffect(() => {
+        const interval = setInterval(() => setThaiNow(getCurrentThaiDateTime()), 10000);
+        return () => clearInterval(interval);
+    }, []);
 
     // โหลดสินค้าทั้งหมด
     useEffect(() => {
@@ -21,7 +54,6 @@ const OrderRequestModal: React.FC<{
             const { data } = await supabase.from('products').select('id, name, unit').order('name');
             if (data) {
                 setProducts(data);
-                // เริ่มต้นจำนวนเป็น 0 ทุกตัว
                 const initialQty: { [key: string]: number } = {};
                 data.forEach(p => { initialQty[p.id] = 0; });
                 setQuantities(initialQty);
@@ -38,10 +70,20 @@ const OrderRequestModal: React.FC<{
         }));
     };
 
-    const handleSubmit = async () => {
-        if (!requestDate) return alert('กรุณาระบุวันที่ต้องการรับของ');
+    // อนุญาตให้เลือกได้แค่เป็นวันนี้ขึ้นไป (วันที่อดีตไม่อนุญาต)
+    const minDate = dateToDateInputString(thaiNow);
 
-        // กรองเอาเฉพาะตัวที่มีจำนวน > 0
+    const handleSubmit = async () => {
+        if (!requestDate) {
+            alert('กรุณาระบุวันที่ต้องการรับของ');
+            return;
+        }
+        // เช็คว่า requestDate < minDate (อดีต)
+        if (requestDate < minDate) {
+            alert('วันที่รับของต้องเป็นวันนี้ขึ้นไป');
+            return;
+        }
+
         const itemsToOrder = products
             .filter(p => quantities[p.id] > 0)
             .map(p => ({
@@ -56,7 +98,11 @@ const OrderRequestModal: React.FC<{
             // 1. สร้าง Order
             const { data: order, error: orderError } = await supabase
                 .from('orders')
-                .insert({ branch_id: branchId, requested_date: requestDate, status: 'PENDING' })
+                .insert({
+                    branch_id: branchId,
+                    requested_date: requestDate,
+                    status: 'PENDING'
+                })
                 .select().single();
 
             if (orderError) throw orderError;
@@ -89,12 +135,18 @@ const OrderRequestModal: React.FC<{
             <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl relative z-10 flex flex-col max-h-[90vh] overflow-hidden">
 
                 {/* Header */}
-                <div className="bg-blue-600 p-6 text-white shrink-0 flex justify-between items-center">
+                <div className="bg-blue-600 p-6 text-white shrink-0 flex flex-col md:flex-row justify-between md:items-center gap-2">
                     <div>
                         <h3 className="text-xl font-bold flex items-center gap-2">🛒 สั่งสินค้าเข้าสาขา</h3>
                         <p className="text-blue-100 text-sm">เลือกสินค้าที่ต้องการเบิกจากรายการด้านล่าง</p>
                     </div>
-                    <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition">✕</button>
+                    <button onClick={onClose} className="absolute top-6 right-6 w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition">✕</button>
+                    <div className="mt-3 md:mt-0 text-xs bg-white/10 rounded-xl px-3 py-2 text-blue-100 font-semibold flex flex-col">
+                        <span>
+                            <span className="font-bold">⏱ วันที่ร้องขอ: </span>
+                            {formatThaiDateTime(thaiNow)}
+                        </span>
+                    </div>
                 </div>
 
                 {/* Controls Section (วันที่ & ค้นหา) */}
@@ -105,6 +157,7 @@ const OrderRequestModal: React.FC<{
                             type="date"
                             className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-700"
                             value={requestDate}
+                            min={minDate}
                             onChange={e => setRequestDate(e.target.value)}
                         />
                     </div>
