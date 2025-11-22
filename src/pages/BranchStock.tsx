@@ -6,11 +6,11 @@ import StockActionModal from '../components/StockActionModal';
 import RecycleBinModal from '../components/RecycleBinModal';
 import OrderRequestModal from '../components/OrderRequestModal';
 
-// Use dynamic import to avoid build/lint errors if module is missing
-let Dialog: any;
+// Fix: use dynamic import for Dialog to avoid require error in browser/TS
+let Dialog: any = null;
 try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    Dialog = require('@headlessui/react').Dialog;
+    // @ts-ignore
+    Dialog = (await import('@headlessui/react')).Dialog;
 } catch {
     Dialog = () => null;
 }
