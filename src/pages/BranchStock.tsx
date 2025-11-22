@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
 
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -6,14 +6,10 @@ import StockActionModal from '../components/StockActionModal';
 import RecycleBinModal from '../components/RecycleBinModal';
 import OrderRequestModal from '../components/OrderRequestModal';
 
-// Fix: use dynamic import for Dialog to avoid require error in browser/TS
-let Dialog: any = null;
-try {
-    // @ts-ignore
-    Dialog = (await import('@headlessui/react')).Dialog;
-} catch {
-    Dialog = () => null;
-}
+// Lazy load Dialog, and fallback to null if import fails (for SSR/Vercel compatibility)
+const DialogLazy = lazy(() =>
+    import('@headlessui/react').then(mod => ({ default: mod.Dialog })).catch(() => ({ default: () => null }))
+);
 
 type ProductStock = { id: number; productId: string; name: string; unit: string; min_alert_quantity: number; current_quantity: number; };
 type SummaryItem = { name: string; unit: string; received: number; used: number; remaining: number; };
@@ -30,15 +26,12 @@ type Order = {
 
 // === Helper for UTC+7 conversion === //
 function toBangkokDate(dateOrString: Date | string): Date {
-    // Accepts an ISO string (always UTC), or Date object, 
-    // returns new Date in local browser, shifted +7h for display as Asia/Bangkok
     let utcDate: Date;
     if (typeof dateOrString === 'string') {
         utcDate = new Date(dateOrString);
     } else {
         utcDate = dateOrString;
     }
-    // Add 7 hours (25200000 ms)
     return new Date(utcDate.getTime() + 7 * 60 * 60 * 1000);
 }
 
@@ -65,10 +58,8 @@ const BranchStock: React.FC = () => {
     const [isReceiving, setIsReceiving] = useState(false);
 
     // --- Helper Functions สำหรับเวลาไทย (ใช้ Intl แม่นยำที่สุด) ---
-    // 1. แสดงวันที่ (22 พ.ย. 2568)
     const displayThaiDate = (isoString: string) => {
         if (!isoString) return '-';
-        // สำหรับโชว์เวลาไทย จริงๆ isoString มาจาก utc, ใช้ Date(isoString) + set timezone Asia/Bangkok ให้ใช้ Intl ทำงาน
         return new Date(isoString).toLocaleDateString('th-TH', {
             timeZone: 'Asia/Bangkok',
             year: 'numeric',
@@ -77,7 +68,6 @@ const BranchStock: React.FC = () => {
         });
     };
 
-    // 2. แสดงเวลา (14:30)
     const displayThaiTime = (isoString: string) => {
         if (!isoString) return '-';
         return new Date(isoString).toLocaleTimeString('th-TH', {
@@ -87,7 +77,6 @@ const BranchStock: React.FC = () => {
         });
     };
 
-    // 3. แปลงสำหรับใช้คำนวณ Logic (YYYY-MM-DD)
     const toThaiISODate = (date: Date) => {
         return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
     };
@@ -199,17 +188,14 @@ const BranchStock: React.FC = () => {
 
     const handleConfirmReceive = async () => {
         if (!confirmReceiveOrder || isReceiving) return;
-        setIsReceiving(true); // ล็อคปุ่ม
-
+        setIsReceiving(true);
         try {
             for (const item of confirmReceiveOrder.order_items) {
-                // เรียก RPC ที่รวม Insert Transaction + Update Stock ไว้แล้ว (Atomic)
-                // เพื่อป้องกันข้อมูลไม่ตรงกัน
                 const { error } = await supabase.rpc('perform_stock_transaction', {
                     p_branch_id: branch?.id,
                     p_product_id: item.products.id,
                     p_quantity_change: item.quantity,
-                    p_type: 'ADD', // ระบุว่าเป็นรับของ
+                    p_type: 'ADD',
                     p_performed_by: branch?.login_code
                 });
 
@@ -223,7 +209,7 @@ const BranchStock: React.FC = () => {
         } catch (err: any) { 
             alert('Error: ' + err.message); 
         } finally { 
-            setIsReceiving(false); // ปลดล็อคเสมอ
+            setIsReceiving(false);
         }
     };
     const handleDeleteItem = async () => {
@@ -245,6 +231,17 @@ const BranchStock: React.FC = () => {
     };
 
     if (isLoading) return <div className="p-10 text-center"><div className="animate-spin h-10 w-10 border-4 border-indigo-600 rounded-full border-t-transparent mx-auto"></div></div>;
+
+    // Dialog component for SSR/CSR safety
+    function DialogIfAvailable(props: any) {
+        // For SSR: avoid rendering Dialog
+        if (typeof window === 'undefined') return null;
+        return (
+            <Suspense fallback={null}>
+                <DialogLazy {...props}>{props.children}</DialogLazy>
+            </Suspense>
+        );
+    }
 
     return (
         <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in space-y-8">
@@ -395,7 +392,6 @@ const BranchStock: React.FC = () => {
                                 <div className="text-center py-10 text-slate-400 border-2 border-dashed rounded-xl">ไม่พบประวัติ</div>
                             ) : (
                                 displayedHistory.map((txn) => {
-                                    // เวลาจาก Supabase เป็น UTC ให้แปลง offset +7 ชั่วโมงก่อนโชว์ (Asia/Bangkok)!
                                     const createdAtBangkok = toBangkokDate(txn.created_at);
                                     const thaiDate = createdAtBangkok.toLocaleDateString('th-TH', {
                                         year: 'numeric',
@@ -414,7 +410,6 @@ const BranchStock: React.FC = () => {
                                                 <div>
                                                     <p className="font-bold text-slate-700 text-sm">{txn.type === 'ADD' ? 'รับของเข้า' : txn.type === 'REMOVE' ? 'เบิกของออก' : 'กู้คืนรายการ'} <span className="ml-2 text-indigo-600 font-bold">{txn.products?.name}</span></p>
                                                     <div className="flex gap-2 text-xs text-slate-400 mt-0.5">
-                                                        {/* เวลาในประเทศไทย (ไทยแลนด์, = UTC + 7 ชม.) */}
                                                         <span>⏰ ดำเนินการ: <span className="font-bold text-slate-500">{thaiDate} {thaiTime}</span></span>
                                                         <span>👤 โดย: {txn.performed_by}</span>
                                                     </div>
@@ -460,11 +455,11 @@ const BranchStock: React.FC = () => {
             )}
 
             {/* Confirm Receive Order Modal */}
-            {confirmReceiveOrder && Dialog && (
-                <Dialog open={!!confirmReceiveOrder} onClose={() => setConfirmReceiveOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
+            {confirmReceiveOrder && (
+                <DialogIfAvailable open={!!confirmReceiveOrder} onClose={() => setConfirmReceiveOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
                     <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <Dialog.Panel className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <Dialog.Title className="font-bold text-lg mb-2">ยืนยันรับของเข้า</Dialog.Title>
+                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
+                            <div className="font-bold text-lg mb-2">ยืนยันรับของเข้า</div>
                             <div className="mb-4 text-slate-600">
                                 คุณต้องการยืนยันการรับรายการนี้เข้าสต็อกหรือไม่?
                                 <ul className="mt-2 space-y-1">
@@ -494,17 +489,17 @@ const BranchStock: React.FC = () => {
                                     {isReceiving ? 'กำลังดำเนินการ...' : 'ยืนยันรับของ'}
                                 </button>
                             </div>
-                        </Dialog.Panel>
+                        </div>
                     </div>
-                </Dialog>
+                </DialogIfAvailable>
             )}
 
             {/* Confirm Cancel Order Modal */}
-            {confirmCancelOrder && Dialog && (
-                <Dialog open={!!confirmCancelOrder} onClose={() => setConfirmCancelOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
+            {confirmCancelOrder && (
+                <DialogIfAvailable open={!!confirmCancelOrder} onClose={() => setConfirmCancelOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
                     <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <Dialog.Panel className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <Dialog.Title className="font-bold text-lg mb-2">ยืนยันการยกเลิกรายการสั่งซื้อ</Dialog.Title>
+                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
+                            <div className="font-bold text-lg mb-2">ยืนยันการยกเลิกรายการสั่งซื้อ</div>
                             <div className="mb-4 text-slate-600">ต้องการยกเลิกคำขอนี้ใช่หรือไม่?</div>
                             <div className="flex justify-end gap-2">
                                 <button
@@ -522,17 +517,17 @@ const BranchStock: React.FC = () => {
                                     ยืนยันยกเลิก
                                 </button>
                             </div>
-                        </Dialog.Panel>
+                        </div>
                     </div>
-                </Dialog>
+                </DialogIfAvailable>
             )}
 
             {/* Confirm Delete Stock Modal */}
-            {confirmDeleteStock && Dialog && (
-                <Dialog open={!!confirmDeleteStock} onClose={() => setConfirmDeleteStock(null)} className="fixed z-40 inset-0 overflow-y-auto">
+            {confirmDeleteStock && (
+                <DialogIfAvailable open={!!confirmDeleteStock} onClose={() => setConfirmDeleteStock(null)} className="fixed z-40 inset-0 overflow-y-auto">
                     <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <Dialog.Panel className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <Dialog.Title className="font-bold text-lg mb-2">ลบสินค้าออกจากสต็อก</Dialog.Title>
+                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
+                            <div className="font-bold text-lg mb-2">ลบสินค้าออกจากสต็อก</div>
                             <div className="mb-4 text-slate-600">
                                 คุณต้องการลบ <span className="font-bold text-red-600">{confirmDeleteStock.name}</span> ออกจากรายการสต็อกใช่หรือไม่?
                             </div>
@@ -552,17 +547,17 @@ const BranchStock: React.FC = () => {
                                     ยืนยันลบ
                                 </button>
                             </div>
-                        </Dialog.Panel>
+                        </div>
                     </div>
-                </Dialog>
+                </DialogIfAvailable>
             )}
 
             {/* Success Modal */}
-            {successModal.show && Dialog && (
-                <Dialog open={successModal.show} onClose={() => setSuccessModal({ show: false, message: '' })} className="fixed z-50 inset-0 overflow-y-auto">
+            {successModal.show && (
+                <DialogIfAvailable open={successModal.show} onClose={() => setSuccessModal({ show: false, message: '' })} className="fixed z-50 inset-0 overflow-y-auto">
                     <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <Dialog.Panel className="bg-white rounded-xl p-6 max-w-sm w-full mx-auto">
-                            <Dialog.Title className="font-bold text-lg mb-4 text-green-700">✅ สำเร็จ</Dialog.Title>
+                        <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-auto">
+                            <div className="font-bold text-lg mb-4 text-green-700">✅ สำเร็จ</div>
                             <div className="mb-4 text-slate-700 text-center">{successModal.message}</div>
                             <div className="flex justify-center">
                                 <button
@@ -573,9 +568,9 @@ const BranchStock: React.FC = () => {
                                     ปิด
                                 </button>
                             </div>
-                        </Dialog.Panel>
+                        </div>
                     </div>
-                </Dialog>
+                </DialogIfAvailable>
             )}
         </div>
     );
