@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, Suspense, lazy } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
@@ -6,10 +6,26 @@ import StockActionModal from '../components/StockActionModal';
 import RecycleBinModal from '../components/RecycleBinModal';
 import OrderRequestModal from '../components/OrderRequestModal';
 
-// Lazy load Dialog, and fallback to null if import fails (for SSR/Vercel compatibility)
-const DialogLazy = lazy(() =>
-    import('@headlessui/react').then(mod => ({ default: mod.Dialog })).catch(() => ({ default: () => null }))
-);
+// --- Custom Dialog implementation ---
+// A minimal Dialog fallback to replace @headlessui/react/Dialog
+function SimpleDialog({ open, onClose, className = '', children }: any) {
+    if (!open) return null;
+    return (
+        <div className={className}>
+            <div className="flex items-center justify-center min-h-screen px-4 bg-black/40" onClick={onClose}>
+                <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto relative" onClick={e => e.stopPropagation()}>
+                    {children}
+                </div>
+            </div>
+        </div>
+    );
+}
+function DialogIfAvailable(props: any) {
+    // For SSR: avoid rendering Dialog
+    if (typeof window === 'undefined') return null;
+    // only accepts open, onClose, className, children
+    return <SimpleDialog {...props}>{props.children}</SimpleDialog>;
+}
 
 type ProductStock = { id: number; productId: string; name: string; unit: string; min_alert_quantity: number; current_quantity: number; };
 type SummaryItem = { name: string; unit: string; received: number; used: number; remaining: number; };
@@ -231,17 +247,6 @@ const BranchStock: React.FC = () => {
     };
 
     if (isLoading) return <div className="p-10 text-center"><div className="animate-spin h-10 w-10 border-4 border-indigo-600 rounded-full border-t-transparent mx-auto"></div></div>;
-
-    // Dialog component for SSR/CSR safety
-    function DialogIfAvailable(props: any) {
-        // For SSR: avoid rendering Dialog
-        if (typeof window === 'undefined') return null;
-        return (
-            <Suspense fallback={null}>
-                <DialogLazy {...props}>{props.children}</DialogLazy>
-            </Suspense>
-        );
-    }
 
     return (
         <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in space-y-8">
