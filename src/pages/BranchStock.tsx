@@ -6,27 +6,7 @@ import StockActionModal from '../components/StockActionModal';
 import RecycleBinModal from '../components/RecycleBinModal';
 import OrderRequestModal from '../components/OrderRequestModal';
 
-// --- Custom Dialog implementation ---
-// A minimal Dialog fallback to replace @headlessui/react/Dialog
-function SimpleDialog({ open, onClose, className = '', children }: any) {
-    if (!open) return null;
-    return (
-        <div className={className}>
-            <div className="flex items-center justify-center min-h-screen px-4 bg-black/40" onClick={onClose}>
-                <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto relative" onClick={e => e.stopPropagation()}>
-                    {children}
-                </div>
-            </div>
-        </div>
-    );
-}
-function DialogIfAvailable(props: any) {
-    // For SSR: avoid rendering Dialog
-    if (typeof window === 'undefined') return null;
-    // only accepts open, onClose, className, children
-    return <SimpleDialog {...props}>{props.children}</SimpleDialog>;
-}
-
+// Define Types
 type ProductStock = { id: number; productId: string; name: string; unit: string; min_alert_quantity: number; current_quantity: number; };
 type SummaryItem = { name: string; unit: string; received: number; used: number; remaining: number; };
 type ProductOption = { id: string; name: string; };
@@ -39,17 +19,6 @@ type Order = {
     created_at: string;
     order_items: { quantity: number, products: { name: string, unit: string, id: string } }[];
 };
-
-// === Helper for UTC+7 conversion === //
-function toBangkokDate(dateOrString: Date | string): Date {
-    let utcDate: Date;
-    if (typeof dateOrString === 'string') {
-        utcDate = new Date(dateOrString);
-    } else {
-        utcDate = dateOrString;
-    }
-    return new Date(utcDate.getTime() + 7 * 60 * 60 * 1000);
-}
 
 const BranchStock: React.FC = () => {
     const { branch } = useAuth();
@@ -74,6 +43,8 @@ const BranchStock: React.FC = () => {
     const [isReceiving, setIsReceiving] = useState(false);
 
     // --- Helper Functions สำหรับเวลาไทย (ใช้ Intl แม่นยำที่สุด) ---
+    
+    // 1. แสดงวันที่ (22 พ.ย. 2568)
     const displayThaiDate = (isoString: string) => {
         if (!isoString) return '-';
         return new Date(isoString).toLocaleDateString('th-TH', {
@@ -84,6 +55,7 @@ const BranchStock: React.FC = () => {
         });
     };
 
+    // 2. แสดงเวลา (14:30)
     const displayThaiTime = (isoString: string) => {
         if (!isoString) return '-';
         return new Date(isoString).toLocaleTimeString('th-TH', {
@@ -93,6 +65,7 @@ const BranchStock: React.FC = () => {
         });
     };
 
+    // 3. แปลงสำหรับใช้คำนวณ Logic (YYYY-MM-DD)
     const toThaiISODate = (date: Date) => {
         return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
     };
@@ -204,17 +177,19 @@ const BranchStock: React.FC = () => {
 
     const handleConfirmReceive = async () => {
         if (!confirmReceiveOrder || isReceiving) return;
-        setIsReceiving(true);
+        setIsReceiving(true); // ล็อคปุ่ม
         try {
             for (const item of confirmReceiveOrder.order_items) {
+                // เรียก RPC ที่รวม Insert Transaction + Update Stock ไว้แล้ว (Atomic)
+                // เพื่อป้องกันข้อมูลไม่ตรงกัน
                 const { error } = await supabase.rpc('perform_stock_transaction', {
                     p_branch_id: branch?.id,
                     p_product_id: item.products.id,
                     p_quantity_change: item.quantity,
-                    p_type: 'ADD',
+                    p_type: 'ADD', // ระบุว่าเป็นรับของ
                     p_performed_by: branch?.login_code
                 });
-
+                
                 if (error) throw error;
             }
             await supabase.from('orders').update({ status: 'COMPLETED' }).eq('id', confirmReceiveOrder.id);
@@ -225,7 +200,7 @@ const BranchStock: React.FC = () => {
         } catch (err: any) { 
             alert('Error: ' + err.message); 
         } finally { 
-            setIsReceiving(false);
+            setIsReceiving(false); // ปลดล็อคเสมอ
         }
     };
     const handleDeleteItem = async () => {
@@ -236,7 +211,7 @@ const BranchStock: React.FC = () => {
     };
 
     const displayedStock = filterProductId ? stock.filter(item => item.productId === filterProductId) : stock;
-    const displayedHistory = transactions.filter(t =>
+    const displayedHistory = transactions.filter(t => 
         (t.products?.name?.toLowerCase() || '').includes(historySearch.toLowerCase()) ||
         (t.performed_by?.toLowerCase() || '').includes(historySearch.toLowerCase())
     );
@@ -258,7 +233,7 @@ const BranchStock: React.FC = () => {
                     <button onClick={() => setIsRecycleBinOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 hover:text-red-500 transition shadow-sm font-bold text-sm">🗑️ ประวัติการใช้ (24ชม.)</button>
                 </div>
             </div>
-
+            
             {/* Active Orders */}
             {activeOrders.length > 0 && (
                 <div className="space-y-4">
@@ -314,6 +289,7 @@ const BranchStock: React.FC = () => {
             </div>
 
             <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden animate-slide-up min-h-[300px]">
+                
                 {/* Tab 1: Stock */}
                 {activeTab === 'stock' && (
                     <>
@@ -393,189 +369,181 @@ const BranchStock: React.FC = () => {
                             <span className="absolute left-3 top-3.5 text-slate-400">📜</span>
                         </div>
                         <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
-                            {displayedHistory.length === 0 ? (
-                                <div className="text-center py-10 text-slate-400 border-2 border-dashed rounded-xl">ไม่พบประวัติ</div>
-                            ) : (
-                                displayedHistory.map((txn) => {
-                                    const createdAtBangkok = toBangkokDate(txn.created_at);
-                                    const thaiDate = createdAtBangkok.toLocaleDateString('th-TH', {
-                                        year: 'numeric',
-                                        month: 'short',
-                                        day: 'numeric'
-                                    });
-                                    const thaiTime = createdAtBangkok.toLocaleTimeString('th-TH', {
-                                        hour: '2-digit',
-                                        minute: '2-digit'
-                                    });
-
-                                    return (
-                                        <div key={txn.id} className="flex justify-between items-center p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition">
-                                            <div className="flex items-center gap-3">
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${txn.type === 'ADD' ? 'bg-green-100 text-green-600' : txn.type === 'REMOVE' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{txn.type === 'ADD' ? '📥' : txn.type === 'REMOVE' ? '📤' : '↩️'}</div>
-                                                <div>
-                                                    <p className="font-bold text-slate-700 text-sm">{txn.type === 'ADD' ? 'รับของเข้า' : txn.type === 'REMOVE' ? 'เบิกของออก' : 'กู้คืนรายการ'} <span className="ml-2 text-indigo-600 font-bold">{txn.products?.name}</span></p>
-                                                    <div className="flex gap-2 text-xs text-slate-400 mt-0.5">
-                                                        <span>⏰ ดำเนินการ: <span className="font-bold text-slate-500">{thaiDate} {thaiTime}</span></span>
-                                                        <span>👤 โดย: {txn.performed_by}</span>
-                                                    </div>
-                                                </div>
+                            {displayedHistory.length === 0 ? <div className="text-center py-10 text-slate-400 border-2 border-dashed rounded-xl">ไม่พบประวัติ</div> : 
+                            displayedHistory.map((txn) => (
+                                <div key={txn.id} className="flex justify-between items-center p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${txn.type === 'ADD' ? 'bg-green-100 text-green-600' : txn.type === 'REMOVE' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{txn.type === 'ADD' ? '📥' : txn.type === 'REMOVE' ? '📤' : '↩️'}</div>
+                                        <div>
+                                            <p className="font-bold text-slate-700 text-sm">{txn.type === 'ADD' ? 'รับของเข้า' : txn.type === 'REMOVE' ? 'เบิกของออก' : 'กู้คืนรายการ'} <span className="ml-2 text-indigo-600 font-bold">{txn.products?.name}</span></p>
+                                            <div className="flex gap-2 text-xs text-slate-400 mt-0.5">
+                                                <span>📅 {displayThaiDate(txn.created_at)}</span>
+                                                <span>🕒 {displayThaiTime(txn.created_at)}</span>
+                                                <span>👤 โดย: {txn.performed_by}</span>
                                             </div>
-                                            <span className={`font-bold font-mono text-lg ${txn.type === 'ADD' || txn.type === 'RESTORE' ? 'text-green-600' : 'text-red-600'}`}>{(txn.type === 'ADD' || txn.type === 'RESTORE' ? '+' : '-')}{txn.quantity_change} {txn.products?.unit}</span>
                                         </div>
-                                    )
-                                })
-                            )}
+                                    </div>
+                                    <span className={`font-bold font-mono text-lg ${txn.type === 'ADD' || txn.type === 'RESTORE' ? 'text-green-600' : 'text-red-600'}`}>{(txn.type === 'ADD' || txn.type === 'RESTORE' ? '+' : '-')}{txn.quantity_change} {txn.products?.unit}</span>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Modals */}
-            {selectedProductForAction && branch && (
-                <StockActionModal
-                    onClose={() => setSelectedProductForAction(null)}
-                    onSuccess={fetchData}
-                    branchId={branch.id}
-                    productId={selectedProductForAction.id}
-                    productName={selectedProductForAction.name}
-                    loginCode={branch.login_code}
-                />
-            )}
-            {isRecycleBinOpen && branch && (
-                <RecycleBinModal
-                    branchId={branch.id}
-                    onClose={() => setIsRecycleBinOpen(false)}
-                    onSuccess={fetchData}
-                />
-            )}
-            {isOrderModalOpen && branch && (
-                <OrderRequestModal
-                    branchId={branch.id}
-                    onClose={() => setIsOrderModalOpen(false)}
-                    onSuccess={() => {
-                        fetchData();
-                        setSuccessModal({ show: true, message: 'ส่งคำขอเรียบร้อย! รอแอดมินอนุมัติ' });
-                    }}
-                />
-            )}
-
-            {/* Confirm Receive Order Modal */}
+            {/* Modals (Modal ที่ซ้อนทับกันได้ ต้องใช้ z-index สูงๆ หรือวางเรียงให้ถูก) */}
+            {selectedProductForAction && branch && (<StockActionModal onClose={() => setSelectedProductForAction(null)} onSuccess={fetchData} branchId={branch.id} productId={selectedProductForAction.id} productName={selectedProductForAction.name} loginCode={branch.login_code} />)}
+            {isRecycleBinOpen && branch && (<RecycleBinModal branchId={branch.id} onClose={() => setIsRecycleBinOpen(false)} onSuccess={fetchData} />)}
+            {isOrderModalOpen && branch && (<OrderRequestModal branchId={branch.id} onClose={() => setIsOrderModalOpen(false)} onSuccess={() => { fetchData(); setSuccessModal({ show: true, message: 'ส่งคำขอเรียบร้อย! รอแอดมินอนุมัติ' }); }} />)}
+            
+            {/* Custom Modal: ยืนยันรับของ */}
             {confirmReceiveOrder && (
-                <DialogIfAvailable open={!!confirmReceiveOrder} onClose={() => setConfirmReceiveOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
-                    <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <div className="font-bold text-lg mb-2">ยืนยันรับของเข้า</div>
-                            <div className="mb-4 text-slate-600">
-                                คุณต้องการยืนยันการรับรายการนี้เข้าสต็อกหรือไม่?
-                                <ul className="mt-2 space-y-1">
-                                    {confirmReceiveOrder.order_items.map((item, idx) => (
-                                        <li key={idx} className="flex justify-between">
-                                            <span>• {item.products.name}</span>
-                                            <span className="font-bold">{item.quantity} {item.products.unit}</span>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
-                                    onClick={() => setConfirmReceiveOrder(null)}
-                                    disabled={isReceiving}
+                <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 animate-fade-in">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmReceiveOrder(null)}></div>
+                    <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
+                        
+                        {/* Header พร้อมปุ่มปิด */}
+                        <div className="flex justify-between items-center p-5 border-b border-slate-100">
+                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                                <span className="text-2xl">📦</span> ยืนยันรับสินค้า
+                            </h3>
+                            <button onClick={() => setConfirmReceiveOrder(null)} className="text-slate-400 hover:text-slate-600 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <div className="p-6">
+                             <p className="text-slate-600 mb-4">รายการสินค้าที่จะรับเข้าสต็อก:</p>
+                             {/* รายการสินค้าแบบเลื่อนได้ */}
+                            <ul className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 text-sm text-slate-700 mb-6 max-h-[200px] overflow-y-auto custom-scrollbar">
+                                {confirmReceiveOrder.order_items.map((item, i) => (
+                                    <li key={i} className="flex justify-between border-b border-slate-200 last:border-0 pb-2 last:pb-0">
+                                        <span className="font-medium">{item.products.name}</span>
+                                        <span className="font-bold text-slate-900">{item.quantity} {item.products.unit}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                            
+                            {/* ปุ่ม Action */}
+                            <div className="flex gap-3">
+                                <button 
+                                    onClick={() => setConfirmReceiveOrder(null)} 
+                                    disabled={isReceiving} 
+                                    className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 hover:border-slate-300 transition disabled:opacity-50"
                                 >
                                     ยกเลิก
                                 </button>
-                                <button
-                                    type="button"
-                                    className={`px-4 py-2 rounded-lg text-white font-bold ${isReceiving ? 'bg-green-400' : 'bg-green-600 hover:bg-green-700'}`}
-                                    onClick={handleConfirmReceive}
-                                    disabled={isReceiving}
+                                <button 
+                                    onClick={handleConfirmReceive} 
+                                    disabled={isReceiving} 
+                                    className={`flex-1 py-3 rounded-xl font-bold text-white shadow-lg transition flex items-center justify-center gap-2
+                                        ${isReceiving ? 'bg-slate-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 hover:shadow-green-200/50 active:scale-95'}`}
                                 >
-                                    {isReceiving ? 'กำลังดำเนินการ...' : 'ยืนยันรับของ'}
+                                    {isReceiving ? (
+                                        <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> กำลังบันทึก...</>
+                                    ) : (
+                                        <>✅ ยืนยันรับของ</>
+                                    )}
                                 </button>
                             </div>
                         </div>
                     </div>
-                </DialogIfAvailable>
+                </div>
             )}
 
-            {/* Confirm Cancel Order Modal */}
+            {/* Custom Modal: ยืนยันยกเลิก */}
             {confirmCancelOrder && (
-                <DialogIfAvailable open={!!confirmCancelOrder} onClose={() => setConfirmCancelOrder(null)} className="fixed z-40 inset-0 overflow-y-auto">
-                    <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <div className="font-bold text-lg mb-2">ยืนยันการยกเลิกรายการสั่งซื้อ</div>
-                            <div className="mb-4 text-slate-600">ต้องการยกเลิกคำขอนี้ใช่หรือไม่?</div>
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
-                                    onClick={() => setConfirmCancelOrder(null)}
-                                >
-                                    ยกเลิก
+                 <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 animate-fade-in">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmCancelOrder(null)}></div>
+                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
+                         {/* Header พร้อมปุ่มปิด */}
+                        <div className="flex justify-end p-4 pb-0">
+                             <button onClick={() => setConfirmCancelOrder(null)} className="text-slate-400 hover:text-slate-600 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="p-6 pt-0 text-center">
+                            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <span className="text-3xl">🗑️</span>
+                            </div>
+                            <h3 className="text-xl font-bold text-slate-800 mb-2">ยกเลิกคำขอ?</h3>
+                            <p className="text-slate-500 text-sm mb-6">คุณแน่ใจหรือไม่ที่จะลบคำขอนี้? <br/>การกระทำนี้ไม่สามารถย้อนกลับได้</p>
+                            <div className="flex gap-3">
+                                <button onClick={() => setConfirmCancelOrder(null)} className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition">
+                                    ไม่, เก็บไว้
                                 </button>
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold"
-                                    onClick={handleConfirmCancel}
-                                >
-                                    ยืนยันยกเลิก
+                                <button onClick={handleConfirmCancel} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg shadow-red-200/50 transition active:scale-95">
+                                    ใช่, ยกเลิกเลย
                                 </button>
                             </div>
                         </div>
                     </div>
-                </DialogIfAvailable>
+                </div>
             )}
 
-            {/* Confirm Delete Stock Modal */}
+            {/* Custom Modal: ยืนยันลบสินค้า */}
             {confirmDeleteStock && (
-                <DialogIfAvailable open={!!confirmDeleteStock} onClose={() => setConfirmDeleteStock(null)} className="fixed z-40 inset-0 overflow-y-auto">
-                    <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-auto">
-                            <div className="font-bold text-lg mb-2">ลบสินค้าออกจากสต็อก</div>
-                            <div className="mb-4 text-slate-600">
-                                คุณต้องการลบ <span className="font-bold text-red-600">{confirmDeleteStock.name}</span> ออกจากรายการสต็อกใช่หรือไม่?
+                <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 animate-fade-in">
+                    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDeleteStock(null)}></div>
+                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
+                         {/* Header พร้อมปุ่มปิด */}
+                         <div className="flex justify-end p-4 pb-0">
+                             <button onClick={() => setConfirmDeleteStock(null)} className="text-slate-400 hover:text-slate-600 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div className="p-6 pt-0 text-center">
+                            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                                <span className="text-3xl">⚠️</span>
                             </div>
-                            <div className="flex justify-end gap-2">
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold"
-                                    onClick={() => setConfirmDeleteStock(null)}
-                                >
+                            <h3 className="text-xl font-bold text-slate-800 mb-2">ซ่อนรายการสินค้า?</h3>
+                            <p className="text-slate-500 text-sm mb-6">
+                                คุณต้องการซ่อน <strong>"{confirmDeleteStock.name}"</strong> ออกจากหน้านี้ใช่ไหม? <br/>
+                                (รายการนี้จะย้ายไปอยู่ในถังขยะ และสามารถกู้คืนได้ในภายหลัง)
+                            </p>
+                            <div className="flex gap-3">
+                                <button onClick={() => setConfirmDeleteStock(null)} className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition">
                                     ยกเลิก
                                 </button>
-                                <button
-                                    type="button"
-                                    className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold"
-                                    onClick={handleDeleteItem}
-                                >
-                                    ยืนยันลบ
+                                <button onClick={handleDeleteItem} className="flex-1 py-3 rounded-xl bg-orange-500 text-white font-bold hover:bg-orange-600 shadow-lg shadow-orange-200/50 transition active:scale-95">
+                                    ยืนยันซ่อน
                                 </button>
                             </div>
                         </div>
                     </div>
-                </DialogIfAvailable>
+                </div>
             )}
 
             {/* Success Modal */}
             {successModal.show && (
-                <DialogIfAvailable open={successModal.show} onClose={() => setSuccessModal({ show: false, message: '' })} className="fixed z-50 inset-0 overflow-y-auto">
-                    <div className="flex items-center justify-center min-h-screen px-4 bg-black/40">
-                        <div className="bg-white rounded-xl p-6 max-w-sm w-full mx-auto">
-                            <div className="font-bold text-lg mb-4 text-green-700">✅ สำเร็จ</div>
-                            <div className="mb-4 text-slate-700 text-center">{successModal.message}</div>
-                            <div className="flex justify-center">
-                                <button
-                                    type="button"
-                                    className="px-6 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-bold"
-                                    onClick={() => setSuccessModal({ show: false, message: '' })}
-                                >
-                                    ปิด
-                                </button>
-                            </div>
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in">
+                    <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setSuccessModal({ show: false, message: '' })}></div>
+                    <div className="bg-white rounded-3xl shadow-2xl p-8 relative z-10 flex flex-col items-center max-w-sm w-full text-center animate-bounce-in overflow-hidden">
+                        {/* ปุ่มปิด */}
+                        <button onClick={() => setSuccessModal({ show: false, message: '' })} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                        <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4">
+                            <span className="text-5xl animate-ping-once">🎉</span>
                         </div>
+                        <h3 className="text-2xl font-bold text-slate-800 mb-2">สำเร็จ!</h3>
+                        <p className="text-slate-600 mb-8 leading-relaxed">{successModal.message}</p>
+                        <button 
+                            onClick={() => setSuccessModal({ show: false, message: '' })} 
+                            className="w-full py-3.5 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 shadow-lg transition transform active:scale-95"
+                        >
+                            ตกลง, เข้าใจแล้ว
+                        </button>
                     </div>
-                </DialogIfAvailable>
+                </div>
             )}
         </div>
     );
