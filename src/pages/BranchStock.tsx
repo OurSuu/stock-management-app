@@ -177,8 +177,7 @@ const BranchStock: React.FC = () => {
             const txnDateKey = getThaiDateKey(t.created_at);
             const txnMonthKey = getThaiMonthKey(t.created_at);
 
-            const prodName = t.products?.name || 'สินค้าไม่ระบุ';
-            const unit = t.products?.unit || '';
+            // Removed unused prodName and unit
             const productId = t.products?.id;
             const qty = t.quantity_change;
             const type = t.type;
