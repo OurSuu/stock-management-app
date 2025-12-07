@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 // Helper: Format date string (in UTC or ISO format) into Thai date+time using device timezone (assume client in Thailand)
@@ -37,6 +37,9 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
     const [deliveryDate, setDeliveryDate] = useState('');
     const [confirmingOrder, setConfirmingOrder] = useState<any | null>(null);
 
+    // สำหรับ input[type=date]
+    const deliveryDateInputRef = useRef<HTMLInputElement>(null);
+
     // For pop up alerts/modals
     const [popup, setPopup] = useState<{
         show: boolean;
@@ -62,6 +65,10 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
     const handleOpenApproveModal = (order: any) => {
         setConfirmingOrder(order);
         setDeliveryDate('');
+        setTimeout(() => {
+            deliveryDateInputRef.current?.blur(); // reset autofocus, then re-focus
+            deliveryDateInputRef.current?.focus();
+        }, 100);
     };
 
     // ยืนยันการอนุมัติ
@@ -165,6 +172,21 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
         );
     };
 
+    // ฟังก์ชันช่วยให้เลือกวันใน input[type="date"] ได้ง่ายขึ้นบนมือถือ
+    const handleOpenDatePicker = () => {
+        deliveryDateInputRef.current?.showPicker && deliveryDateInputRef.current?.showPicker();
+        deliveryDateInputRef.current?.focus();
+    };
+
+    // หาวันที่ minimal (คือวันนี้)
+    function getToday() {
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+    }
+
     return (
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 h-full">
             {/* Pop up modal */}
@@ -248,15 +270,37 @@ const AdminOrderManager: React.FC<{ onUpdate?: () => void }> = ({ onUpdate }) =>
 
                             {/* เลือกวันที่ส่ง */}
                             <div>
-                                <label className="block text-sm font-bold text-slate-700 mb-2">
+                                <label
+                                    className="block text-sm font-bold text-slate-700 mb-2"
+                                    htmlFor="delivery-date-picker"
+                                >
                                     🚚 กำหนดวันที่ของจะไปถึง (Delivery Date)
                                 </label>
-                                <input
-                                    type="date"
-                                    className="w-full p-3 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-medium text-slate-700"
-                                    value={deliveryDate}
-                                    onChange={e => setDeliveryDate(e.target.value)}
-                                />
+                                <div
+                                    className="relative"
+                                >
+                                    <input
+                                        id="delivery-date-picker"
+                                        ref={deliveryDateInputRef}
+                                        type="date"
+                                        className="w-full p-3 bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-medium text-slate-700 cursor-pointer"
+                                        value={deliveryDate}
+                                        min={getToday()}
+                                        onChange={e => setDeliveryDate(e.target.value)}
+                                        onFocus={e => e.currentTarget.showPicker && e.currentTarget.showPicker()}
+                                    />
+                                    <button
+                                        type="button"
+                                        className="absolute inset-y-0 right-2 flex items-center px-1 text-slate-500 hover:text-green-600 bg-transparent border-0"
+                                        tabIndex={-1}
+                                        aria-label="เปิดเลือกวันที่"
+                                        onClick={handleOpenDatePicker}
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" height="20" viewBox="0 0 24 24" width="20">
+                                            <path fill="currentColor" d="M19 4h-1V2h-2v2H8V2H6v2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 16H5V9h14v11zm0-13H5V6h14v1z"/>
+                                        </svg>
+                                    </button>
+                                </div>
                                 <p className="text-xs text-slate-400 mt-1">
                                     * วันที่สาขาขอมาคือ: {new Date(confirmingOrder.requested_date).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' })}
                                 </p>

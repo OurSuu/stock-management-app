@@ -7,8 +7,16 @@ import RecycleBinModal from '../components/RecycleBinModal';
 import OrderRequestModal from '../components/OrderRequestModal';
 
 // Define Types
-type ProductStock = { id: number; productId: string; name: string; unit: string; min_alert_quantity: number; current_quantity: number; };
-type SummaryItem = { name: string; unit: string; received: number; used: number; remaining: number; };
+type ProductStock = {
+    id: number;
+    productId: string;
+    name: string;
+    unit: string;
+    min_alert_quantity: number;
+    current_quantity: number;
+    category?: string; // <-- เพิ่มตัวนี้ (รองรับสินค้าของเก่าไม่มีหมวดหมู่)
+};
+type SummaryItem = { name: string; unit: string; received: number; used: number; remaining: number; productId?: string; category?: string };
 type ProductOption = { id: string; name: string; };
 type Order = {
     id: string;
@@ -26,7 +34,12 @@ const BranchStock: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'stock' | 'history' | 'summary'>('stock');
     const [stock, setStock] = useState<ProductStock[]>([]);
     const [transactions, setTransactions] = useState<any[]>([]);
-    const [summary, setSummary] = useState<{ today: SummaryItem[], month: SummaryItem[] }>({ today: [], month: [] });
+    // เปลี่ยน summary จาก array เป็นรวมหมวดหมู่
+    const [summaryGrouped, setSummaryGrouped] = useState<{
+        today: { [category: string]: SummaryItem[] },
+        month: { [category: string]: SummaryItem[] }
+    }>({ today: {}, month: {} });
+    // คงอันเก่า ไว้ใช้เวลาต้องแยก struct
     const [allProducts, setAllProducts] = useState<ProductOption[]>([]);
     const [filterProductId, setFilterProductId] = useState<string>('');
     const [historySearch, setHistorySearch] = useState('');
@@ -42,35 +55,45 @@ const BranchStock: React.FC = () => {
     const [successModal, setSuccessModal] = useState<{ show: boolean, message: string }>({ show: false, message: '' });
     const [isReceiving, setIsReceiving] = useState(false);
 
-    // --- Helper Functions สำหรับเวลาไทย (ใช้ Intl แม่นยำที่สุด) ---
-    
-    // 1. แสดงวันที่ (22 พ.ย. 2568)
-    const displayThaiDate = (isoString: string) => {
-        if (!isoString) return '-';
-        return new Date(isoString).toLocaleDateString('th-TH', {
-            timeZone: 'Asia/Bangkok',
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-        });
+    // 👉 เพิ่ม State สำหรับ filter หมวดหมู่
+    const [filterCategory, setFilterCategory] = useState<'all' | 'ingredients' | 'supplies'>('all');
+
+    // --- ✅ Manual Timezone Helper Functions (ไม่ใช้ Intl, manual +7hr) ---
+    const getThaiDateObj = (isoString: string) => {
+        if (!isoString) return new Date();
+        const date = new Date(isoString);
+        return new Date(date.getTime() + 7 * 60 * 60 * 1000); // manual offset to +07:00
     };
 
-    // 2. แสดงเวลา (14:30)
-    const displayThaiTime = (isoString: string) => {
+    const formatThaiDate = (isoString: string) => {
         if (!isoString) return '-';
-        return new Date(isoString).toLocaleTimeString('th-TH', {
-            timeZone: 'Asia/Bangkok',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
+        const thaiTime = getThaiDateObj(isoString);
+        const day = thaiTime.getUTCDate();
+        const month = thaiTime.getUTCMonth();
+        const year = thaiTime.getUTCFullYear() + 543; // พ.ศ.
+        const months = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+        return `${day} ${months[month]} ${year}`;
     };
 
-    // 3. แปลงสำหรับใช้คำนวณ Logic (YYYY-MM-DD)
-    const toThaiISODate = (date: Date) => {
-        return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    // -- แก้ไขให้เวลาไทยถูกต้อง ใช้ getHours()/getMinutes() (localtime of new Date) --
+    const formatThaiTime = (isoString: string) => {
+        if (!isoString) return '-';
+        const thaiTime = getThaiDateObj(isoString);
+        const hours = thaiTime.getHours().toString().padStart(2, '0');
+        const minutes = thaiTime.getMinutes().toString().padStart(2, '0');
+        return `${hours}:${minutes}`;
     };
-    const toThaiISOMonth = (date: Date) => {
-        return toThaiISODate(date).slice(0, 7);
+
+    // สำหรับ summary mapping
+    const getThaiDateKey = (isoString: string) => {
+        const thaiTime = getThaiDateObj(isoString);
+        const yyyy = thaiTime.getUTCFullYear();
+        const mm = String(thaiTime.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(thaiTime.getUTCDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+    };
+    const getThaiMonthKey = (isoString: string) => {
+        return getThaiDateKey(isoString).slice(0, 7); // YYYY-MM
     };
 
     useEffect(() => {
@@ -83,19 +106,25 @@ const BranchStock: React.FC = () => {
 
     const fetchData = useCallback(async () => {
         if (!branch?.id) return;
-
         setIsLoading(true);
+        // 1. Stock (เพิ่ม category ใน select)
+        const { data: stockData } = await supabase
+            .from('stock')
+            .select(`id, product_id, current_quantity, products ( name, unit, min_alert_quantity, category )`)
+            .eq('branch_id', branch.id)
+            .is('deleted_at', null);
 
-        // 1. Stock
-        const { data: stockData } = await supabase.from('stock').select(`id, product_id, current_quantity, products ( name, unit, min_alert_quantity )`).eq('branch_id', branch.id).is('deleted_at', null);
-
-        const remainingMap = new Map<string, number>();
         const formattedStock: ProductStock[] = (stockData ?? []).map((item: any) => {
             const prod = Array.isArray(item.products) ? item.products[0] : item.products;
             if (!prod) return null;
-            remainingMap.set(prod.name, Number(item.current_quantity));
             return {
-                id: item.id, productId: item.product_id, current_quantity: Number(item.current_quantity), name: prod.name, unit: prod.unit, min_alert_quantity: Number(prod.min_alert_quantity) || 0,
+                id: item.id,
+                productId: item.product_id,
+                current_quantity: Number(item.current_quantity),
+                name: prod.name,
+                unit: prod.unit,
+                min_alert_quantity: Number(prod.min_alert_quantity) || 0,
+                category: prod.category || 'ingredients', // default = ingredients
             };
         }).filter(Boolean) as ProductStock[];
         setStock(formattedStock);
@@ -118,46 +147,79 @@ const BranchStock: React.FC = () => {
 
         const { data: txnData } = await supabase
             .from('transactions')
-            .select('*, products(name, unit)')
+            .select('*, products(name, unit, id)')
             .eq('branch_id', branch.id)
             .gte('created_at', startOfMonth.toISOString())
             .order('created_at', { ascending: false });
 
         setTransactions(txnData || []);
 
-        // --- คำนวณ Summary (Logic เวลาไทย) ---
-        const now = new Date();
-        const todayKey = toThaiISODate(now);
-        const currentMonthKey = toThaiISOMonth(now);
+        // --- คำนวณ Summary (Manual Thai Timezone) ---
+        const nowISO = new Date().toISOString();
+        const todayKey = getThaiDateKey(nowISO);
+        const currentMonthKey = getThaiMonthKey(nowISO);
+
+        // Change: Fill summary with ALL products in stock by keying with productId
         const todayMap = new Map<string, SummaryItem>();
         const monthMap = new Map<string, SummaryItem>();
-        const getOrInit = (map: Map<string, SummaryItem>, name: string, unit: string) => {
-            if (!map.has(name)) map.set(name, { name, unit, received: 0, used: 0, remaining: remainingMap.get(name) || 0 });
-            return map.get(name)!;
-        };
+        // เพิ่ม categoryMap เอาไว้ดู category จาก productId
+        const categoryMap = new Map<string, string>();
 
+        // 1. Add all products in current stock as base "remaining" (by productId)
+        formattedStock.forEach((s) => {
+            todayMap.set(s.productId, { name: s.name, unit: s.unit, received: 0, used: 0, remaining: s.current_quantity, productId: s.productId, category: s.category });
+            monthMap.set(s.productId, { name: s.name, unit: s.unit, received: 0, used: 0, remaining: s.current_quantity, productId: s.productId, category: s.category });
+            categoryMap.set(s.productId, s.category || 'ingredients');
+        });
+
+        // 2. Process transactions to update received/used (by productId)
         txnData?.forEach((t: any) => {
-            const txnDate = new Date(t.created_at);
-            const txnDateKey = toThaiISODate(txnDate);
-            const txnMonthKey = toThaiISOMonth(txnDate);
+            const txnDateKey = getThaiDateKey(t.created_at);
+            const txnMonthKey = getThaiMonthKey(t.created_at);
 
             const prodName = t.products?.name || 'สินค้าไม่ระบุ';
             const unit = t.products?.unit || '';
+            const productId = t.products?.id;
             const qty = t.quantity_change;
             const type = t.type;
 
-            const updateItem = (item: SummaryItem) => {
+            // Try to find items using productId, else fallback to name+unit key for legacy/corner cases
+            const todayItem = productId && todayMap.has(productId) ? todayMap.get(productId)! : undefined;
+            const monthItem = productId && monthMap.has(productId) ? monthMap.get(productId)! : undefined;
+
+            const applyTo = (item: SummaryItem | undefined) => {
+                if (!item) return;
                 if (type === 'ADD') item.received += qty;
                 else if (type === 'REMOVE') item.used += Math.abs(qty);
                 else if (type === 'RESTORE') { item.used -= Math.abs(qty); if (item.used < 0) item.used = 0; }
             };
 
-            if (txnMonthKey === currentMonthKey) updateItem(getOrInit(monthMap, prodName, unit));
-            if (txnDateKey === todayKey) updateItem(getOrInit(todayMap, prodName, unit));
+            if (txnMonthKey === currentMonthKey && monthItem) applyTo(monthItem);
+            if (txnDateKey === todayKey && todayItem) applyTo(todayItem);
         });
 
-        setSummary({ today: Array.from(todayMap.values()), month: Array.from(monthMap.values()) });
+        // 3. Convert to arrays and sort + group by category
+        const groupByCategory = (arr: SummaryItem[]) => {
+            const grouped: { [category: string]: SummaryItem[] } = {};
+            arr.forEach(item => {
+                const cat = item.category || 'ingredients';
+                if (!grouped[cat]) grouped[cat] = [];
+                grouped[cat].push(item);
+            });
+            // Sort inside group
+            Object.keys(grouped).forEach(cat => {
+                grouped[cat] = grouped[cat].sort((a, b) => a.name.localeCompare(b.name, 'th'));
+            });
+            return grouped;
+        };
 
+        const todaySummaryArr: SummaryItem[] = Array.from(todayMap.values());
+        const monthSummaryArr: SummaryItem[] = Array.from(monthMap.values());
+
+        const todayGrouped = groupByCategory(todaySummaryArr);
+        const monthGrouped = groupByCategory(monthSummaryArr);
+
+        setSummaryGrouped({ today: todayGrouped, month: monthGrouped });
         setIsLoading(false);
     }, [branch?.id]);
 
@@ -169,38 +231,34 @@ const BranchStock: React.FC = () => {
     const handleConfirmCancel = async () => {
         if (!confirmCancelOrder) return;
         const { error } = await supabase.from('orders').delete().eq('id', confirmCancelOrder);
-        if (error) alert('Error: ' + error.message);
-        else { fetchData(); setSuccessModal({ show: true, message: 'ยกเลิกคำขอเรียบร้อยแล้ว' }); }
+        if (error) alert('Error: ' + error.message); else { fetchData(); setSuccessModal({ show: true, message: 'ยกเลิกคำขอเรียบร้อยแล้ว' }); }
         setConfirmCancelOrder(null);
     };
     const handleClickReceive = (order: Order) => setConfirmReceiveOrder(order);
 
     const handleConfirmReceive = async () => {
         if (!confirmReceiveOrder || isReceiving) return;
-        setIsReceiving(true); // ล็อคปุ่ม
+        setIsReceiving(true);
         try {
             for (const item of confirmReceiveOrder.order_items) {
-                // เรียก RPC ที่รวม Insert Transaction + Update Stock ไว้แล้ว (Atomic)
-                // เพื่อป้องกันข้อมูลไม่ตรงกัน
                 const { error } = await supabase.rpc('perform_stock_transaction', {
                     p_branch_id: branch?.id,
                     p_product_id: item.products.id,
                     p_quantity_change: item.quantity,
-                    p_type: 'ADD', // ระบุว่าเป็นรับของ
+                    p_type: 'ADD',
                     p_performed_by: branch?.login_code
                 });
-                
                 if (error) throw error;
             }
             await supabase.from('orders').update({ status: 'COMPLETED' }).eq('id', confirmReceiveOrder.id);
 
-            fetchData(); 
-            setConfirmReceiveOrder(null); 
+            fetchData();
+            setConfirmReceiveOrder(null);
             setSuccessModal({ show: true, message: 'รับของเรียบร้อย! สต็อกอัปเดตแล้ว' });
-        } catch (err: any) { 
-            alert('Error: ' + err.message); 
-        } finally { 
-            setIsReceiving(false); // ปลดล็อคเสมอ
+        } catch (err: any) {
+            alert('Error: ' + err.message);
+        } finally {
+            setIsReceiving(false);
         }
     };
     const handleDeleteItem = async () => {
@@ -210,8 +268,16 @@ const BranchStock: React.FC = () => {
         setConfirmDeleteStock(null);
     };
 
-    const displayedStock = filterProductId ? stock.filter(item => item.productId === filterProductId) : stock;
-    const displayedHistory = transactions.filter(t => 
+    // 👉 ปรับ Logic กรองสินค้า: ทั้ง product และหมวดหมู่
+    const displayedStock = stock.filter(item => {
+        // 1. ตามสินค้าที่เลือก
+        const matchProduct = filterProductId ? item.productId === filterProductId : true;
+        // 2. ตามหมวดหมู่ที่เลือก ('all' ผ่านหมด, อื่นๆ = เทียบ category)
+        const matchCategory = filterCategory === 'all' ? true : (item.category === filterCategory);
+        return matchProduct && matchCategory;
+    });
+
+    const displayedHistory = transactions.filter(t =>
         (t.products?.name?.toLowerCase() || '').includes(historySearch.toLowerCase()) ||
         (t.performed_by?.toLowerCase() || '').includes(historySearch.toLowerCase())
     );
@@ -233,8 +299,8 @@ const BranchStock: React.FC = () => {
                     <button onClick={() => setIsRecycleBinOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 hover:text-red-500 transition shadow-sm font-bold text-sm">🗑️ ประวัติการใช้ (24ชม.)</button>
                 </div>
             </div>
-            
-            {/* Active Orders */}
+
+            {/* Active Orders List */}
             {activeOrders.length > 0 && (
                 <div className="space-y-4">
                     <h3 className="font-bold text-slate-700 text-lg flex items-center gap-2">📦 รายการสั่งซื้อ <span className="bg-slate-100 text-slate-500 text-xs px-2 py-1 rounded-full">{activeOrders.length}</span></h3>
@@ -248,20 +314,21 @@ const BranchStock: React.FC = () => {
                                             <span className={`text-xs font-bold px-2 py-1 rounded-md ${order.status === 'IN_TRANSIT' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'}`}>
                                                 {order.status === 'IN_TRANSIT' ? '🚚 กำลังมาส่ง' : '⏳ รออนุมัติ'}
                                             </span>
-                                            <div className="mt-2 text-sm text-slate-600">
+                                            <div className="mt-3 text-sm text-slate-600 space-y-1">
                                                 {isAdminPush ? (
                                                     <p className="font-bold text-indigo-600">🎁 ได้รับของจาก: {order.approved_by}</p>
                                                 ) : (
                                                     <>
-                                                        <p>📅 ขอรับวันที่: <span className="font-bold">{displayThaiDate(order.requested_date)}</span></p>
-                                                        <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
-                                                            {/* ✅ แก้ไขเวลาให้ใช้ Helper function */}
-                                                            <span>⏰ ขอเมื่อ: <span className="font-bold text-slate-500">{displayThaiDate(order.created_at)} {displayThaiTime(order.created_at)}</span></span>
+                                                        <p>📅 ขอรับวันที่: <span className="font-bold">{formatThaiDate(order.requested_date)}</span></p>
+                                                        <div className="flex items-center gap-2 text-xs text-slate-400">
+                                                            <span>⏰ กดขอเมื่อ: <span className="font-bold text-slate-500">{formatThaiTime(order.created_at)}</span></span>
                                                         </div>
                                                     </>
                                                 )}
                                                 {order.status === 'IN_TRANSIT' && order.delivery_date && (
-                                                    <p className="mt-1">🚛 ของจะถึง: <span className="font-bold text-green-700">{displayThaiDate(order.delivery_date)}</span></p>
+                                                    <p className="font-bold text-green-700 pt-1">
+                                                        🚛 ของจะถึง: {formatThaiDate(order.delivery_date)}
+                                                    </p>
                                                 )}
                                             </div>
                                         </div>
@@ -288,166 +355,224 @@ const BranchStock: React.FC = () => {
                 <button onClick={() => setActiveTab('history')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'history' ? 'bg-pink-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-50'}`}>📅 ประวัติย้อนหลัง</button>
             </div>
 
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden animate-slide-up min-h-[300px]">
-                
-                {/* Tab 1: Stock */}
-                {activeTab === 'stock' && (
-                    <>
-                        <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                            <div className="flex items-center gap-3 w-full sm:w-auto">
-                                <span className="text-sm font-bold text-slate-500 whitespace-nowrap">🔍 กรองสินค้า:</span>
-                                <select value={filterProductId} onChange={(e) => setFilterProductId(e.target.value)} className="p-2.5 pl-4 pr-10 bg-white border border-slate-200 rounded-xl text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm w-full sm:w-64 cursor-pointer">
-                                    <option value="">ทั้งหมด ({stock.length})</option>
-                                    {allProducts.map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                                </select>
-                            </div>
+            {/* Stock Tab */}
+            {activeTab === 'stock' && (
+                <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden animate-slide-up">
+                    {/* 5. ปุ่มเลือกหมวดหมู่ และ dropdown filter เดิม */}
+                    <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex flex-col gap-4">
+                        {/* ปุ่มเลือกหมวดหมู่ */}
+                        <div className="flex gap-2">
+                            <button
+                                onClick={() => setFilterCategory('all')}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold transition ${filterCategory === 'all' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                            >
+                                ทั้งหมด
+                            </button>
+                            <button
+                                onClick={() => setFilterCategory('ingredients')}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold transition ${filterCategory === 'ingredients' ? 'bg-green-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-green-50'}`}
+                            >
+                                🥬 วัตถุดิบ
+                            </button>
+                            <button
+                                onClick={() => setFilterCategory('supplies')}
+                                className={`px-4 py-2 rounded-lg text-sm font-bold transition ${filterCategory === 'supplies' ? 'bg-blue-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50'}`}
+                            >
+                                🥤 แก้ว/อุปกรณ์
+                            </button>
                         </div>
-                        <table className="min-w-full">
-                            <thead className="bg-slate-50 border-b border-slate-100">
-                                <tr><th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">สินค้า</th><th className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase">สถานะ</th><th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase">คงเหลือ</th><th className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase">จัดการ</th></tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                                {displayedStock.length > 0 ? displayedStock.map((item) => (
-                                    <tr key={item.id} className="hover:bg-slate-50/50 transition group">
-                                        <td className="px-6 py-4 text-sm font-bold text-slate-700">{item.name}</td>
-                                        <td className="px-6 py-4 text-center">{getStatusBadge(item.current_quantity, item.min_alert_quantity)}</td>
-                                        <td className="px-6 py-4 text-sm text-right font-mono font-bold text-slate-800 text-lg">{item.current_quantity} <span className="text-xs text-slate-400 font-sans font-normal ml-1">{item.unit}</span></td>
-                                        <td className="px-6 py-4 text-center flex justify-center gap-2">
-                                            <button onClick={() => setSelectedProductForAction({ id: item.productId, name: item.name })} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-500 hover:text-white transition shadow-sm" title="ใช้ของ">📉 ใช้ของ</button>
-                                            <button onClick={() => setConfirmDeleteStock({ id: item.id, name: item.name })} className="p-2 text-slate-300 hover:text-slate-500 hover:bg-slate-100 rounded-lg transition" title="ลบรายการ">🗑️</button>
-                                        </td>
-                                    </tr>
-                                )) : (<tr><td colSpan={4} className="p-10 text-center text-slate-400">ไม่พบข้อมูลสินค้า</td></tr>)}
-                            </tbody>
-                        </table>
-                    </>
-                )}
-
-                {/* Tab 2: Summary */}
-                {activeTab === 'summary' && (
-                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="bg-white rounded-2xl shadow-sm border border-indigo-100 overflow-hidden">
-                            <div className="bg-indigo-50 p-4 border-b border-indigo-100 flex justify-between items-center">
-                                <h3 className="font-bold text-indigo-700">📅 วันนี้</h3>
-                                <span className="text-xs text-indigo-500 font-bold">{displayThaiDate(new Date().toISOString())}</span>
-                            </div>
-                            <div className="p-4 max-h-[400px] overflow-y-auto custom-scrollbar">
-                                {summary.today.length === 0 ? <div className="text-center py-8 text-slate-400">ไม่มีรายการ</div> : 
-                                summary.today.map((item, i) => (
-                                    <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
-                                        <div className="flex flex-col"><span className="text-slate-700 font-bold">{item.name}</span><span className="text-xs text-slate-400">หน่วย: {item.unit}</span></div>
-                                        <div className="flex items-center gap-3">
-                                            <div className="flex flex-col items-end pr-3 border-r border-slate-200"><span className="text-[10px] text-slate-400 uppercase">คงเหลือ</span><span className="font-bold text-slate-700">{item.remaining}</span></div>
-                                            <div className="flex flex-col gap-1 text-[10px] font-bold"><span className={`px-2 py-0.5 rounded ${item.received > 0 ? 'bg-green-100 text-green-700' : 'opacity-0'}`}>รับ +{item.received}</span><span className={`px-2 py-0.5 rounded ${item.used > 0 ? 'bg-red-100 text-red-700' : 'opacity-0'}`}>ใช้ -{item.used}</span></div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        <div className="bg-white rounded-2xl shadow-sm border border-orange-100 overflow-hidden">
-                            <div className="bg-orange-50 p-4 border-b border-orange-100 flex justify-between items-center"><h3 className="font-bold text-orange-700">🗓️ เดือนนี้</h3></div>
-                            <div className="p-4 max-h-[400px] overflow-y-auto custom-scrollbar">
-                                {summary.month.map((item, i) => (
-                                    <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
-                                        <div className="flex flex-col"><span className="text-slate-700 font-bold">{item.name}</span><span className="text-xs text-slate-400">หน่วย: {item.unit}</span></div>
-                                        <div className="flex items-center gap-3">
-                                            <div className="flex flex-col items-end pr-3 border-r border-slate-200"><span className="text-[10px] text-slate-400 uppercase">คงเหลือ</span><span className="font-bold text-slate-700">{item.remaining}</span></div>
-                                            <div className="flex flex-col gap-1 text-[10px] font-bold"><span className={`px-2 py-0.5 rounded ${item.received > 0 ? 'bg-green-100 text-green-700' : 'opacity-0'}`}>รับ +{item.received}</span><span className={`px-2 py-0.5 rounded ${item.used > 0 ? 'bg-red-100 text-red-700' : 'opacity-0'}`}>ใช้ -{item.used}</span></div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                        {/* Dropdown กรองรายชื่อสินค้า (ของเดิม) */}
+                        <div className="flex items-center gap-3 w-full sm:w-auto">
+                            <span className="text-sm font-bold text-slate-500 whitespace-nowrap">🔍 กรองสินค้า:</span>
+                            <select value={filterProductId} onChange={(e) => setFilterProductId(e.target.value)} className="p-2.5 pl-4 pr-10 bg-white border border-slate-200 rounded-xl text-slate-700 font-medium focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm w-full sm:w-64 cursor-pointer">
+                                <option value="">ทั้งหมด ({stock.length})</option>
+                                {allProducts.map(p => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                            </select>
                         </div>
                     </div>
-                )}
+                    <table className="min-w-full">
+                        <thead className="bg-slate-50 border-b border-slate-100">
+                            <tr>
+                                <th className="px-6 py-4 text-left text-xs font-bold text-slate-500 uppercase">สินค้า</th>
+                                <th className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase">สถานะ</th>
+                                <th className="px-6 py-4 text-right text-xs font-bold text-slate-500 uppercase">คงเหลือ</th>
+                                <th className="px-6 py-4 text-center text-xs font-bold text-slate-500 uppercase">จัดการ</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {displayedStock.length > 0 ? displayedStock.map((item) => (
+                                <tr key={item.id} className="hover:bg-slate-50/50 transition group">
+                                    <td className="px-6 py-4 text-sm font-bold text-slate-700">
+                                        {item.name}
+                                        {/* แสดงหมวดหมู่เล็กๆต่อท้ายชื่อ ถ้ามี */}
+                                        {item.category &&
+                                            <span className={`ml-2 text-xs rounded px-2 py-0.5 ${item.category === 'supplies' ? 'bg-blue-50 text-blue-500 border border-blue-100' : 'bg-green-50 text-green-600 border border-green-100'}`}>
+                                            {item.category === 'supplies' ? 'แก้ว/อุปกรณ์' : 'วัตถุดิบ'}
+                                            </span>
+                                        }
+                                    </td>
+                                    <td className="px-6 py-4 text-center">{getStatusBadge(item.current_quantity, item.min_alert_quantity)}</td>
+                                    <td className="px-6 py-4 text-sm text-right font-mono font-bold text-slate-800 text-lg">{item.current_quantity} <span className="text-xs text-slate-400 font-sans font-normal ml-1">{item.unit}</span></td>
+                                    <td className="px-6 py-4 text-center flex justify-center gap-2">
+                                        <button onClick={() => setSelectedProductForAction({ id: item.productId, name: item.name })} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-500 hover:text-white transition shadow-sm" title="ใช้ของ">📉 ใช้ของ</button>
+                                        <button onClick={() => setConfirmDeleteStock({ id: item.id, name: item.name })} className="p-2 text-slate-300 hover:text-slate-500 hover:bg-slate-100 rounded-lg transition" title="ลบรายการ">🗑️</button>
+                                    </td>
+                                </tr>
+                            )) : (<tr><td colSpan={4} className="p-10 text-center text-slate-400">ไม่พบข้อมูลสินค้า</td></tr>)}
+                        </tbody>
+                    </table>
+                </div>
+            )}
 
-                {/* Tab 3: History */}
-                {activeTab === 'history' && (
-                    <div className="p-6">
-                        <div className="relative mb-4">
-                            <input type="text" placeholder="🔍 ค้นหาประวัติ..." className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} />
-                            <span className="absolute left-3 top-3.5 text-slate-400">📜</span>
+            {/* Summary Tab */}
+            {activeTab === 'summary' && (
+                <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* วันนี้ */}
+                    <div className="bg-white rounded-2xl shadow-sm border border-indigo-100 overflow-hidden flex flex-col">
+                        <div className="bg-indigo-50 p-4 border-b border-indigo-100 flex justify-between items-center">
+                            <h3 className="font-bold text-indigo-700">📅 วันนี้</h3>
+                            <span className="text-xs text-indigo-500 font-bold">{formatThaiDate(new Date().toISOString())}</span>
                         </div>
-                        <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
-                            {displayedHistory.length === 0 ? <div className="text-center py-10 text-slate-400 border-2 border-dashed rounded-xl">ไม่พบประวัติ</div> : 
+                        <div className="p-4 max-h-[400px] overflow-y-auto custom-scrollbar">
+                            {/* ถ้าไม่มีข้อมูลทุกหมวดหมู่ */}
+                            {Object.values(summaryGrouped.today).flat().length === 0 ? (
+                                <div className="text-center py-8 text-slate-400">ไม่มีรายการ</div>
+                            ) : (
+                                Object.entries(summaryGrouped.today).map(([category, items]) => (
+                                    <div key={category} className="mb-4 last:mb-0">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            {category === 'ingredients' ? (
+                                                <span className="bg-green-50 text-green-700 border font-bold px-3 py-1 rounded border-green-100 text-sm">🥬 วัตถุดิบ</span>
+                                            ) : category === 'supplies' ? (
+                                                <span className="bg-blue-50 text-blue-600 border font-bold px-3 py-1 rounded border-blue-100 text-sm">🥤 แก้ว/อุปกรณ์</span>
+                                            ) : (
+                                                <span className="bg-slate-50 text-slate-500 border font-bold px-3 py-1 rounded border-slate-200 text-sm">{category}</span>
+                                            )}
+                                        </div>
+                                        {items.length === 0 ? (
+                                            <div className="text-center py-4 text-slate-300">ไม่มีสินค้าในหมวดนี้</div>
+                                        ) : (
+                                            items.map((item, i) => (
+                                                <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+                                                    <div className="flex flex-col"><span className="text-slate-700 font-bold">{item.name}</span><span className="text-xs text-slate-400">หน่วย: {item.unit}</span></div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="flex flex-col items-end pr-3 border-r border-slate-200"><span className="text-[10px] text-slate-400 uppercase">คงเหลือ</span><span className="font-bold text-slate-700">{item.remaining}</span></div>
+                                                        <div className="flex flex-col gap-1 text-[10px] font-bold"><span className={`px-2 py-0.5 rounded ${item.received > 0 ? 'bg-green-100 text-green-700' : 'opacity-0'}`}>รับ +{item.received}</span><span className={`px-2 py-0.5 rounded ${item.used > 0 ? 'bg-red-100 text-red-700' : 'opacity-0'}`}>ใช้ -{item.used}</span></div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                    {/* เดือนนี้ */}
+                    <div className="bg-white rounded-2xl shadow-sm border border-orange-100 overflow-hidden flex flex-col">
+                        <div className="bg-orange-50 p-4 border-b border-orange-100 flex justify-between items-center"><h3 className="font-bold text-orange-700">🗓️ เดือนนี้</h3></div>
+                        <div className="p-4 max-h-[400px] overflow-y-auto custom-scrollbar">
+                            {Object.values(summaryGrouped.month).flat().length === 0 ? (
+                                <div className="text-center py-8 text-slate-400">ไม่มีรายการ</div>
+                            ) : (
+                                Object.entries(summaryGrouped.month).map(([category, items]) => (
+                                    <div key={category} className="mb-4 last:mb-0">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            {category === 'ingredients' ? (
+                                                <span className="bg-green-50 text-green-700 border font-bold px-3 py-1 rounded border-green-100 text-sm">🥬 วัตถุดิบ</span>
+                                            ) : category === 'supplies' ? (
+                                                <span className="bg-blue-50 text-blue-600 border font-bold px-3 py-1 rounded border-blue-100 text-sm">🥤 แก้ว/อุปกรณ์</span>
+                                            ) : (
+                                                <span className="bg-slate-50 text-slate-500 border font-bold px-3 py-1 rounded border-slate-200 text-sm">{category}</span>
+                                            )}
+                                        </div>
+                                        {items.length === 0 ? (
+                                            <div className="text-center py-4 text-slate-300">ไม่มีสินค้าในหมวดนี้</div>
+                                        ) : (
+                                            items.map((item, i) => (
+                                                <div key={i} className="flex justify-between items-center py-3 border-b border-slate-100 last:border-0">
+                                                    <div className="flex flex-col"><span className="text-slate-700 font-bold">{item.name}</span><span className="text-xs text-slate-400">หน่วย: {item.unit}</span></div>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="flex flex-col items-end pr-3 border-r border-slate-200"><span className="text-[10px] text-slate-400 uppercase">คงเหลือ</span><span className="font-bold text-slate-700">{item.remaining}</span></div>
+                                                        <div className="flex flex-col gap-1 text-[10px] font-bold"><span className={`px-2 py-0.5 rounded ${item.received > 0 ? 'bg-green-100 text-green-700' : 'opacity-0'}`}>รับ +{item.received}</span><span className={`px-2 py-0.5 rounded ${item.used > 0 ? 'bg-red-100 text-red-700' : 'opacity-0'}`}>ใช้ -{item.used}</span></div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* History Tab */}
+            {activeTab === 'history' && (
+                <div className="p-6">
+                    <div className="relative mb-4">
+                        <input type="text" placeholder="🔍 ค้นหาประวัติ..." className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none" value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} />
+                        <span className="absolute left-3 top-3.5 text-slate-400">📜</span>
+                    </div>
+                    <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
+                        {displayedHistory.length === 0 ? (
+                            <div className="text-center py-10 text-slate-400 border-2 border-dashed rounded-xl">ไม่พบประวัติ</div>
+                        ) : (
                             displayedHistory.map((txn) => (
                                 <div key={txn.id} className="flex justify-between items-center p-4 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition">
                                     <div className="flex items-center gap-3">
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${txn.type === 'ADD' ? 'bg-green-100 text-green-600' : txn.type === 'REMOVE' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>{txn.type === 'ADD' ? '📥' : txn.type === 'REMOVE' ? '📤' : '↩️'}</div>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg ${
+                                            txn.type === 'ADD'
+                                                ? 'bg-green-100 text-green-600'
+                                                : txn.type === 'REMOVE'
+                                                    ? 'bg-red-100 text-red-600'
+                                                    : 'bg-blue-100 text-blue-600'
+                                        }`}>
+                                            {txn.type === 'ADD' ? '📥' : txn.type === 'REMOVE' ? '📤' : '↩️'}
+                                        </div>
                                         <div>
-                                            <p className="font-bold text-slate-700 text-sm">{txn.type === 'ADD' ? 'รับของเข้า' : txn.type === 'REMOVE' ? 'เบิกของออก' : 'กู้คืนรายการ'} <span className="ml-2 text-indigo-600 font-bold">{txn.products?.name}</span></p>
-                                            <div className="flex gap-2 text-xs text-slate-400 mt-0.5">
-                                                <span>📅 {displayThaiDate(txn.created_at)}</span>
-                                                <span>🕒 {displayThaiTime(txn.created_at)}</span>
+                                            <p className="font-bold text-slate-700 text-sm">
+                                                {txn.type === 'ADD'
+                                                    ? 'รับของเข้า'
+                                                    : txn.type === 'REMOVE'
+                                                        ? 'เบิกของออก'
+                                                        : 'กู้คืนรายการ'}{' '}
+                                                <span className="ml-2 text-indigo-600 font-bold">{txn.products?.name}</span>
+                                            </p>
+                                            {/* ✅ Layout: เวลา + ชื่อผู้ทำ = บรรทัดเดียว ชิดขวา */}
+                                            <div className="flex gap-4 text-xs text-slate-400 mt-0.5 items-center">
+                                                <span>📅 {formatThaiDate(txn.created_at)} {formatThaiTime(txn.created_at)}</span>
                                                 <span>👤 โดย: {txn.performed_by}</span>
                                             </div>
                                         </div>
                                     </div>
-                                    <span className={`font-bold font-mono text-lg ${txn.type === 'ADD' || txn.type === 'RESTORE' ? 'text-green-600' : 'text-red-600'}`}>{(txn.type === 'ADD' || txn.type === 'RESTORE' ? '+' : '-')}{txn.quantity_change} {txn.products?.unit}</span>
+                                    <span
+                                        className={`font-bold font-mono text-lg ${
+                                            txn.type === 'ADD' || txn.type === 'RESTORE' ? 'text-green-600' : 'text-red-600'
+                                        }`}
+                                    >
+                                        {(txn.type === 'ADD' || txn.type === 'RESTORE' ? '+' : '-')}{txn.quantity_change} {txn.products?.unit}
+                                    </span>
                                 </div>
-                            ))}
-                        </div>
+                            ))
+                        )}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
 
             {/* Modals (Modal ที่ซ้อนทับกันได้ ต้องใช้ z-index สูงๆ หรือวางเรียงให้ถูก) */}
             {selectedProductForAction && branch && (<StockActionModal onClose={() => setSelectedProductForAction(null)} onSuccess={fetchData} branchId={branch.id} productId={selectedProductForAction.id} productName={selectedProductForAction.name} loginCode={branch.login_code} />)}
             {isRecycleBinOpen && branch && (<RecycleBinModal branchId={branch.id} onClose={() => setIsRecycleBinOpen(false)} onSuccess={fetchData} />)}
             {isOrderModalOpen && branch && (<OrderRequestModal branchId={branch.id} onClose={() => setIsOrderModalOpen(false)} onSuccess={() => { fetchData(); setSuccessModal({ show: true, message: 'ส่งคำขอเรียบร้อย! รอแอดมินอนุมัติ' }); }} />)}
-            
+
             {/* Custom Modal: ยืนยันรับของ */}
             {confirmReceiveOrder && (
                 <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 animate-fade-in">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmReceiveOrder(null)}></div>
                     <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
-                        
-                        {/* Header พร้อมปุ่มปิด */}
-                        <div className="flex justify-between items-center p-5 border-b border-slate-100">
-                            <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                                <span className="text-2xl">📦</span> ยืนยันรับสินค้า
-                            </h3>
-                            <button onClick={() => setConfirmReceiveOrder(null)} className="text-slate-400 hover:text-slate-600 transition">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        
-                        <div className="p-6">
-                             <p className="text-slate-600 mb-4">รายการสินค้าที่จะรับเข้าสต็อก:</p>
-                             {/* รายการสินค้าแบบเลื่อนได้ */}
-                            <ul className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2 text-sm text-slate-700 mb-6 max-h-[200px] overflow-y-auto custom-scrollbar">
-                                {confirmReceiveOrder.order_items.map((item, i) => (
-                                    <li key={i} className="flex justify-between border-b border-slate-200 last:border-0 pb-2 last:pb-0">
-                                        <span className="font-medium">{item.products.name}</span>
-                                        <span className="font-bold text-slate-900">{item.quantity} {item.products.unit}</span>
-                                    </li>
-                                ))}
-                            </ul>
-                            
-                            {/* ปุ่ม Action */}
-                            <div className="flex gap-3">
-                                <button 
-                                    onClick={() => setConfirmReceiveOrder(null)} 
-                                    disabled={isReceiving} 
-                                    className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 hover:border-slate-300 transition disabled:opacity-50"
-                                >
-                                    ยกเลิก
-                                </button>
-                                <button 
-                                    onClick={handleConfirmReceive} 
-                                    disabled={isReceiving} 
-                                    className={`flex-1 py-3 rounded-xl font-bold text-white shadow-lg transition flex items-center justify-center gap-2
-                                        ${isReceiving ? 'bg-slate-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 hover:shadow-green-200/50 active:scale-95'}`}
-                                >
-                                    {isReceiving ? (
-                                        <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> กำลังบันทึก...</>
-                                    ) : (
-                                        <>✅ ยืนยันรับของ</>
-                                    )}
-                                </button>
-                            </div>
+                        <div className="bg-green-600 p-6 text-white text-center"><div className="text-5xl mb-2">📦</div><h3 className="text-xl font-bold">ยืนยันรับสินค้า</h3></div>
+                        <div className="p-6 bg-slate-50">
+                            <ul className="bg-white p-4 rounded-xl border border-slate-200 space-y-2 text-sm text-slate-700 mb-6 max-h-40 overflow-y-auto">{confirmReceiveOrder.order_items.map((item, i) => (<li key={i} className="flex justify-between border-b border-slate-100 last:border-0 pb-1"><span>{item.products.name}</span><span className="font-bold">{item.quantity} {item.products.unit}</span></li>))}</ul>
+                            <div className="flex gap-3"><button onClick={() => setConfirmReceiveOrder(null)} disabled={isReceiving} className="flex-1 py-3 rounded-xl bg-white border border-slate-200 text-slate-600 font-bold hover:bg-slate-50">ยกเลิก</button><button onClick={handleConfirmReceive} disabled={isReceiving} className={`flex-1 py-3 rounded-xl font-bold text-white shadow-lg transition ${isReceiving ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'}`}>{isReceiving ? '⏳ กำลังบันทึก...' : '✅ ยืนยันรับของ'}</button></div>
                         </div>
                     </div>
                 </div>
@@ -457,30 +582,11 @@ const BranchStock: React.FC = () => {
             {confirmCancelOrder && (
                  <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 animate-fade-in">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmCancelOrder(null)}></div>
-                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
-                         {/* Header พร้อมปุ่มปิด */}
-                        <div className="flex justify-end p-4 pb-0">
-                             <button onClick={() => setConfirmCancelOrder(null)} className="text-slate-400 hover:text-slate-600 transition">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        <div className="p-6 pt-0 text-center">
-                            <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <span className="text-3xl">🗑️</span>
-                            </div>
-                            <h3 className="text-xl font-bold text-slate-800 mb-2">ยกเลิกคำขอ?</h3>
-                            <p className="text-slate-500 text-sm mb-6">คุณแน่ใจหรือไม่ที่จะลบคำขอนี้? <br/>การกระทำนี้ไม่สามารถย้อนกลับได้</p>
-                            <div className="flex gap-3">
-                                <button onClick={() => setConfirmCancelOrder(null)} className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition">
-                                    ไม่, เก็บไว้
-                                </button>
-                                <button onClick={handleConfirmCancel} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg shadow-red-200/50 transition active:scale-95">
-                                    ใช่, ยกเลิกเลย
-                                </button>
-                            </div>
-                        </div>
+                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 p-6 text-center animate-slide-up">
+                        <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4"><span className="text-3xl">🗑️</span></div>
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">ยกเลิกคำขอ?</h3>
+                        <p className="text-slate-500 text-sm mb-6">คุณแน่ใจหรือไม่ที่จะลบคำขอนี้?</p>
+                        <div className="flex gap-3"><button onClick={() => setConfirmCancelOrder(null)} className="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ไม่, เก็บไว้</button><button onClick={handleConfirmCancel} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg shadow-red-200">ใช่, ยกเลิกเลย</button></div>
                     </div>
                 </div>
             )}
@@ -489,33 +595,10 @@ const BranchStock: React.FC = () => {
             {confirmDeleteStock && (
                 <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 animate-fade-in">
                     <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmDeleteStock(null)}></div>
-                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 overflow-hidden animate-slide-up">
-                         {/* Header พร้อมปุ่มปิด */}
-                         <div className="flex justify-end p-4 pb-0">
-                             <button onClick={() => setConfirmDeleteStock(null)} className="text-slate-400 hover:text-slate-600 transition">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        <div className="p-6 pt-0 text-center">
-                            <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                                <span className="text-3xl">⚠️</span>
-                            </div>
-                            <h3 className="text-xl font-bold text-slate-800 mb-2">ซ่อนรายการสินค้า?</h3>
-                            <p className="text-slate-500 text-sm mb-6">
-                                คุณต้องการซ่อน <strong>"{confirmDeleteStock.name}"</strong> ออกจากหน้านี้ใช่ไหม? <br/>
-                                (รายการนี้จะย้ายไปอยู่ในถังขยะ และสามารถกู้คืนได้ในภายหลัง)
-                            </p>
-                            <div className="flex gap-3">
-                                <button onClick={() => setConfirmDeleteStock(null)} className="flex-1 py-3 rounded-xl bg-white border-2 border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition">
-                                    ยกเลิก
-                                </button>
-                                <button onClick={handleDeleteItem} className="flex-1 py-3 rounded-xl bg-orange-500 text-white font-bold hover:bg-orange-600 shadow-lg shadow-orange-200/50 transition active:scale-95">
-                                    ยืนยันซ่อน
-                                </button>
-                            </div>
-                        </div>
+                    <div className="bg-white w-full max-w-sm rounded-3xl shadow-2xl relative z-10 p-6 text-center animate-slide-up">
+                        <div className="w-14 h-14 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4"><span className="text-3xl">⚠️</span></div>
+                        <h3 className="text-xl font-bold text-slate-800 mb-2">ซ่อนรายการสินค้า?</h3>
+                        <div className="flex gap-3"><button onClick={() => setConfirmDeleteStock(null)} className="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200">ยกเลิก</button><button onClick={handleDeleteItem} className="flex-1 py-3 rounded-xl bg-orange-500 text-white font-bold hover:bg-orange-600 shadow-lg shadow-orange-200">ยืนยันซ่อน</button></div>
                     </div>
                 </div>
             )}
@@ -524,27 +607,15 @@ const BranchStock: React.FC = () => {
             {successModal.show && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in">
                     <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={() => setSuccessModal({ show: false, message: '' })}></div>
-                    <div className="bg-white rounded-3xl shadow-2xl p-8 relative z-10 flex flex-col items-center max-w-sm w-full text-center animate-bounce-in overflow-hidden">
-                        {/* ปุ่มปิด */}
-                        <button onClick={() => setSuccessModal({ show: false, message: '' })} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                        <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mb-4">
-                            <span className="text-5xl animate-ping-once">🎉</span>
-                        </div>
+                    <div className="bg-white rounded-3xl shadow-2xl p-8 relative z-10 flex flex-col items-center max-w-sm w-full text-center animate-bounce-in">
+                        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4 text-4xl animate-ping-once">🎉</div>
                         <h3 className="text-2xl font-bold text-slate-800 mb-2">สำเร็จ!</h3>
-                        <p className="text-slate-600 mb-8 leading-relaxed">{successModal.message}</p>
-                        <button 
-                            onClick={() => setSuccessModal({ show: false, message: '' })} 
-                            className="w-full py-3.5 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 shadow-lg transition transform active:scale-95"
-                        >
-                            ตกลง, เข้าใจแล้ว
-                        </button>
+                        <p className="text-slate-600 mb-6">{successModal.message}</p>
+                        <button onClick={() => setSuccessModal({ show: false, message: '' })} className="w-full py-3 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition transform active:scale-95">ตกลง</button>
                     </div>
                 </div>
             )}
+
         </div>
     );
 };
